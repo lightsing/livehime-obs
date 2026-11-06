@@ -9,16 +9,18 @@
 
 ## 安装
 
-1. 关闭 OBS。
-2. 从 [Releases](https://github.com/lightsing/livehime-obs/releases) 下载 `livehime-obs-0.1.0-windows-x64-setup.exe` 并运行，选择安装范围和已安装的 OBS 根目录，例如 `C:\Program Files\obs-studio`。安装向导提供简体中文和英文，会从注册表识别 OBS 位置，并检查 OBS 33.0.1 x64 与 Qt 6.11.1。安装到 Program Files 请选择“为所有用户安装”，需要管理员权限；用户自己的便携目录可选择“仅为我安装”。
+1. 关闭所有 OBS 实例。
+2. 从 [Releases](https://github.com/lightsing/livehime-obs/releases) 下载 `livehime-obs-0.1.0-windows-x64-setup.exe` 并运行，接受 Windows 管理员授权。向导提供简体中文和英文，自动识别 OBS 安装目录，也可手动选择，用于检查 OBS 33.0.1 x64 与 Qt 6.11.1。
 3. 启动 OBS，在「停靠窗口 / Docks」菜单启用「B站直播」。
 4. 如果扫码窗口提示缺少运行时，安装或修复 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。Windows 11 通常已经具备此运行时。
 
-安装器只安装插件文件，说明和许可位于 `data/obs-plugins/livehime-obs/docs`；它不会覆盖 OBS 根目录的说明、许可或主运行库。目标 OBS 正在运行时，安装、升级与卸载都会停止并提示先关闭，安装程序不会结束 OBS 进程。
+标准安装器将插件放入 **`C:\ProgramData\obs-studio\plugins\livehime-obs`**，这是所有用户共享的独立插件目录，不提供“当前用户 / 所有用户”选择。DLL 位于该目录根部，资源位于 `data`，说明和许可位于 `data/docs`。共享插件安装、升级与卸载前要求退出所有 OBS；安装程序只提示关闭，不结束 OBS 进程。用户各自的登录缓存、场景和配置仍保存在各自 OBS 配置目录。
 
-同目录的 ZIP 版可以直接运行安装器升级；同版本重装不会产生重复卸载项。升级自动沿用上次安装范围，并要求保留原 OBS 目录；更换安装范围或迁移到其他 OBS 前先卸载。卸载入口位于 Windows「已安装的应用」中的 **Livehime OBS**，仅移除安装器登记的文件，保留场景、配置、其他插件和本插件的登录缓存。
+同版本重装可以修复插件文件，且不会产生重复卸载项；升级保留原插件目录和关联的 OBS 目录。卸载入口位于 Windows「已安装的应用」中的 **Livehime OBS**，仅移除安装器登记的文件，保留场景、配置、其他插件和登录缓存。
 
-Releases 还提供 `livehime-obs-0.1.0-windows-x64.zip` 供手动安装：将其中 `obs-plugins` 和 `data` 合并到 OBS 根目录。便携版可选择其 OBS 根目录；安装到用户可写目录时，可用 `/CURRENTUSER` 参数运行安装器。不要同时在 OBS 根目录与 ProgramData/新式插件目录放置同名插件，安装器检测到常见重复位置会要求先处理。
+如果装过旧版安装器，先卸载旧版，再安装标准目录版本。手动安装过 ZIP 的用户应先移走 OBS 根目录 `obs-plugins/64bit/livehime-obs.dll`，避免加载重复副本；不要删除 OBS 用户配置。安装器发现旧版或重复副本会给出路径，要求先处理。
+
+Releases 还提供 `livehime-obs-0.1.0-windows-x64.zip`，保留旧目录结构供便携 OBS 手动安装：将其中 `obs-plugins` 和 `data` 合并到便携 OBS 根目录。普通安装版建议使用 EXE；不要同时安装 ZIP 与 EXE 两份插件。
 
 安装包只在插件私有数据目录携带匹配 Qt 6.11.1 的 Schannel TLS 后端，用于 HTTPS。其他 OBS 主版本或 Qt 版本应重新构建，不能直接假定 ABI 兼容。当前安装器尚未做 Authenticode 代码签名，旁边提供 `.sha256` 和 `.json` 记录包与 DLL 的校验值；这不等同于发布者签名。
 
@@ -74,13 +76,13 @@ $obsRoot = & .\scripts\bootstrap-obs.ps1
 
 构建完成后，DLL 位于 `build/RelWithDebInfo/livehime-obs.dll`，ZIP 位于 `dist/`。`verify-load.ps1` 验证依赖加载与 OBS 模块导出，不会登录账号或开播。
 
-`build-installer.ps1` 从已生成的同版本 ZIP 中校验并提取四个运行时文件，再用 Inno Setup 7.1.1 编译标准安装器。`bootstrap-installer.ps1` 按 `deps/installer-toolchain.lock.json` 下载官方构建工具，校验 SHA-256 与发布者签名，以便携模式安装到项目 `.tools`；不设置文件关联或系统 PATH。可用 `-ToolsRoot .\.tools -Offline` 复用已验证缓存。安装脚本位于 `installer/livehime-obs.iss`。
+`build-installer.ps1` 从已生成的同版本 ZIP 中校验并提取四个运行时文件，将同一组字节映射为独立插件目录，再用 Inno Setup 7.1.1 编译标准安装器。`bootstrap-installer.ps1` 按 `deps/installer-toolchain.lock.json` 下载官方构建工具，校验 SHA-256 与发布者签名，以便携模式安装到项目 `.tools`；不设置文件关联或系统 PATH。可用 `-ToolsRoot .\.tools -Offline` 复用已验证缓存。安装脚本位于 `installer/livehime-obs.iss`。
 
 安装器离线验收使用 `scripts/test-installer.ps1 -InstallerPath <setup.exe>`，生成合成的 OBS 宿主和账号哨兵，在独立目录以当前用户模式测试安装、升级、版本拒绝、运行中保护和卸载；不向真实 OBS 安装插件。测试日志保留在指定的 `-Workspace` 中。
 
 ## CI 与自动发布
 
-[Windows 工作流](.github/workflows/windows.yml) 在推送到 `main`、提交 Pull Request 和手动触发时执行：下载并校验依赖、编译、运行 6 组 CTest、检查 DLL 加载、生成 ZIP 和 EXE，以及运行 14 组安装器验收。成功构建的安装包和验证记录可从 Actions artifacts 下载；真实账号登录和推流不属于 CI。
+[Windows 工作流](.github/workflows/windows.yml) 在推送到 `main`、提交 Pull Request 和手动触发时执行：下载并校验依赖、编译、运行 6 组 CTest、检查 DLL 加载、生成 ZIP 和 EXE，以及运行 28 组安装器验收。成功构建的安装包和验证记录可从 Actions artifacts 下载；真实账号登录和推流不属于 CI。
 
 发布新版本时，先修改 `CMakeLists.txt` 中的项目版本并更新说明，提交到 `main`，等待 CI 通过，再推送对应标签：
 

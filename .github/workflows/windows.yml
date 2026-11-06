@@ -135,7 +135,7 @@ jobs:
           if ($reports.Count -ne 1) { throw 'Expected exactly one installer validation report.' }
           $installer = Get-Content -Raw -LiteralPath $reports[0].FullName | ConvertFrom-Json
           if (!$installer.passed -or $installer.retainedCurrentUserRegistration -or
-              @($installer.tests).Count -lt 14 -or @($installer.tests | Where-Object { !$_.passed }).Count -ne 0) {
+              @($installer.tests).Count -lt 28 -or @($installer.tests | Where-Object { !$_.passed }).Count -ne 0) {
             throw 'Installer validation is incomplete or failed.'
           }
           $prefix = $env:PACKAGE_PREFIX
@@ -267,7 +267,7 @@ jobs:
                         $recipesArchive, "$recipesArchive.sha256", 'qt-source-provenance.json', 'qt-source-provenance.json.sha256')
           if ($report.version -cne $env:RELEASE_VERSION -or $report.commit -cne $env:GITHUB_SHA -or
               !$report.ctest.passed -or !$report.dllLoad.passed -or !$report.installer.passed -or
-              $report.ctest.count -lt 6 -or $report.installer.count -lt 14 -or
+              $report.ctest.count -lt 6 -or $report.installer.count -lt 28 -or
               @($report.files).Count -ne $expected.Count) { throw 'Invalid release validation report.' }
           $actualNames = @(Get-ChildItem -LiteralPath release-assets -File | Select-Object -ExpandProperty Name)
           if (@(Compare-Object ($expected + $reportName) $actualNames).Count -ne 0) {
@@ -281,7 +281,7 @@ jobs:
           @(
             "Windows x64 plugin for OBS Studio $($report.obsVersion) / Qt $($report.qtVersion).",
             '',
-            'Close OBS, run the setup EXE, and select the existing OBS root directory. The ZIP is available for manual installation.',
+            'Close all OBS instances and run the setup EXE with administrator approval. It installs the shared plugin under ProgramData/obs-studio/plugins/livehime-obs. The ZIP keeps the legacy layout for portable OBS.',
             '',
             "Validated by CI: $($report.ctest.count) CTest tests, DLL dependency/export checks, and $($report.installer.count) isolated installer cases.",
             'These checks do not validate real-account streaming or room changes. The binaries are not Authenticode signed.',

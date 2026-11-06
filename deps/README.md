@@ -37,6 +37,6 @@ WebView2 使用 Microsoft NuGet 稳定包 **1.0.4314.35** 的公开头文件和 
 - Windows SDK 10.0.26100.0；CMake 最低版本 3.28，生成器 `Visual Studio 17 2022`。
 - C++20、动态发行版 MSVC CRT `/MD`、UTF-8 源码。
 
-包使用 OBS 支持的传统目录结构：`obs-plugins/64bit/livehime-obs.dll` 和 `data/obs-plugins/livehime-obs/`。`package.ps1` 仅创建压缩包与 SHA256 清单，不向 OBS 安装目录写入文件。
+手动 ZIP 使用 OBS 兼容的传统目录结构：`obs-plugins/64bit/livehime-obs.dll` 和 `data/obs-plugins/livehime-obs/`。`package.ps1` 仅创建压缩包与 SHA256 清单，不向 OBS 安装目录写入文件。`build-installer.ps1` 将校验后的同一组运行时文件映射为现代独立目录：`livehime-obs.dll` 与 `data/`；标准 EXE 将其安装到 `ProgramData/obs-studio/plugins/livehime-obs`，不向 OBS 程序目录部署载荷。
 
 手动排查 HTTPS 时，可运行 `scripts/probe-network.ps1 -ObsRoot <OBS目录>`。该命令使用实际 OBS QtNetwork.dll 和插件私有 TLS 目录，只向 `nav` 发一次不带 Cookie 的 GET，输出 Qt 运行库位置、TLS 后端、HTTP 状态和网络错误编号。它不读取会话，也不属于默认离线 CTest；正常匿名响应应为 HTTP 200、业务码 -101。
