@@ -1,0 +1,322 @@
+name: Windows CI and release
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build:
+    name: Build, test and package Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact-id: ${{ steps.assets.outputs.artifact-id }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read version and validate release tag
+        id: version
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path logs/ci | Out-Null
+          $match = [regex]::Match((Get-Content -Raw -LiteralPath CMakeLists.txt),
+            'project\(livehime-obs\s+VERSION\s+(\d+\.\d+\.\d+)\s')
+          if (!$match.Success) { throw 'Cannot read the project version.' }
+          $version = $match.Groups[1].Value
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF_TYPE -eq 'tag' -and
+              $env:GITHUB_REF_NAME -cne "v$version") {
+            throw "Tag '$env:GITHUB_REF_NAME' must exactly match CMake version 'v$version'."
+          }
+          "version=$version" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+          "PACKAGE_PREFIX=livehime-obs-$version-windows-x64" | Add-Content -LiteralPath $env:GITHUB_ENV
+          "PROJECT_VERSION=$version" | Add-Content -LiteralPath $env:GITHUB_ENV
+
+      # Cache only original download archives. Bootstrap scripts recheck their
+      # locked SHA-256 values and recreate extracted runtimes/SDKs on every run.
+      - name: Cache verified dependency downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .deps/*.zip
+            .deps/*.nupkg
+            .deps/source-cache/*.zip
+            .tools/cache/*.exe
+          key: windows-2022-x64-downloads-v1-${{ hashFiles('deps/*.lock.json', 'scripts/bootstrap-*.ps1') }}
+
+      - name: Prepare official OBS runtime
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Start-Transcript -Path logs/ci/bootstrap-obs.log -Force | Out-Null
+          try {
+            $obsRoot = & ./scripts/bootstrap-obs.ps1 -DependenciesRoot .deps
+            if ($obsRoot -isnot [string] -or !(Test-Path -LiteralPath (Join-Path $obsRoot 'bin/64bit/obs64.exe'))) {
+              throw 'bootstrap-obs.ps1 did not return a valid OBS root.'
+            }
+            "OBS_ROOT=$obsRoot" | Add-Content -LiteralPath $env:GITHUB_ENV
+          } finally { Stop-Transcript | Out-Null }
+
+      - name: Build and run CTest
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Start-Transcript -Path logs/ci/build-and-test.log -Force | Out-Null
+          try {
+            & ./scripts/build.ps1 -DependenciesRoot .deps -ObsRoot $env:OBS_ROOT -Jobs 2
+            $inventory = & ctest --test-dir build -C RelWithDebInfo --show-only=json-v1
+            if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate CTest coverage.' }
+            $inventory | Set-Content -LiteralPath logs/ci/ctest-tests.json -Encoding utf8
+            $testNames = @(($inventory | ConvertFrom-Json).tests.name)
+            foreach ($required in @('protocol-vectors', 'session-store-roundtrip', 'controller-state-transitions',
+                                     'obs-bridge-lifecycle', 'ui-crop-smoke', 'native-stream-controls')) {
+              if ($required -notin $testNames) { throw "Required CTest test is missing: $required" }
+            }
+          } finally { Stop-Transcript | Out-Null }
+
+      - name: Verify DLL dependencies and module exports
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./scripts/verify-load.ps1 -ObsRoot $env:OBS_ROOT |
+            Set-Content -LiteralPath logs/ci/load-verification.json -Encoding utf8
+          $result = Get-Content -Raw -LiteralPath logs/ci/load-verification.json | ConvertFrom-Json
+          if (!$result.loaded) { throw 'DLL load verification did not succeed.' }
+
+      - name: Package ZIP and build installer
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Start-Transcript -Path logs/ci/package-and-installer.log -Force | Out-Null
+          try {
+            & ./scripts/package.ps1
+            & ./scripts/build-installer.ps1 -PackagePath "dist/$env:PACKAGE_PREFIX.zip" -ToolsRoot .tools
+          } finally { Stop-Transcript | Out-Null }
+
+      - name: Package matching Qt sources and build recipes
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Start-Transcript -Path logs/ci/source-package.log -Force | Out-Null
+          try {
+            $sourceBundle = & ./scripts/bootstrap-source.ps1 -CacheDirectory .deps/source-cache -OutputDirectory dist
+            if (@($sourceBundle.files).Count -ne 6) { throw 'Incomplete corresponding-source bundle.' }
+            $sourceBundle | ConvertTo-Json -Depth 8 |
+              Set-Content -LiteralPath logs/ci/source-bundle.json -Encoding utf8
+          } finally { Stop-Transcript | Out-Null }
+
+      - name: Verify installation, upgrades and uninstallation
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Start-Transcript -Path logs/ci/installer-tests.log -Force | Out-Null
+          try {
+            & ./scripts/test-installer.ps1 -InstallerPath "dist/$env:PACKAGE_PREFIX-setup.exe" `
+              -PackagePath "dist/$env:PACKAGE_PREFIX.zip" -Workspace build/installer-validation
+          } finally { Stop-Transcript | Out-Null }
+
+      - name: Prepare verified release assets and validation report
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $reports = @(Get-ChildItem -LiteralPath build/installer-validation -Filter validation.json -File -Recurse)
+          if ($reports.Count -ne 1) { throw 'Expected exactly one installer validation report.' }
+          $installer = Get-Content -Raw -LiteralPath $reports[0].FullName | ConvertFrom-Json
+          if (!$installer.passed -or $installer.retainedCurrentUserRegistration -or
+              @($installer.tests).Count -lt 14 -or @($installer.tests | Where-Object { !$_.passed }).Count -ne 0) {
+            throw 'Installer validation is incomplete or failed.'
+          }
+          $prefix = $env:PACKAGE_PREFIX
+          $sourceBundle = Get-Content -Raw -LiteralPath logs/ci/source-bundle.json | ConvertFrom-Json
+          $sourceNames = @($sourceBundle.files.name)
+          $qtArchives = @($sourceNames | Where-Object { $_ -cmatch '^qtbase-everywhere-src-\d+\.\d+\.\d+\.zip$' })
+          $recipeArchives = @($sourceNames | Where-Object { $_ -cmatch '^obs-deps-[0-9a-f]{40}\.zip$' })
+          if ($qtArchives.Count -ne 1 -or $recipeArchives.Count -ne 1) { throw 'Unexpected corresponding-source archive names.' }
+          $expectedSources = @($qtArchives[0], "$($qtArchives[0]).sha256", $recipeArchives[0],
+                               "$($recipeArchives[0]).sha256", 'qt-source-provenance.json', 'qt-source-provenance.json.sha256')
+          if (@(Compare-Object $expectedSources $sourceNames).Count -ne 0) { throw 'Unexpected corresponding-source file list.' }
+          $assetNames = @("$prefix.zip", "$prefix.zip.sha256", "$prefix-setup.exe",
+                          "$prefix-setup.exe.sha256", "$prefix-setup.exe.json") + $sourceNames
+          $files = @($assetNames | ForEach-Object {
+            $path = Join-Path dist $_
+            if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing release asset: $path" }
+            [ordered]@{ name = $_; sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
+          })
+          foreach ($source in $sourceBundle.files) {
+            if ($source.sha256 -cne ($files | Where-Object name -CEQ $source.name).sha256) {
+              throw "Corresponding-source checksum mismatch: $($source.name)"
+            }
+          }
+          foreach ($name in @("$prefix.zip", "$prefix-setup.exe", $qtArchives[0], $recipeArchives[0], 'qt-source-provenance.json')) {
+            $expectedHash = ($files | Where-Object name -eq $name).sha256
+            $checksum = (Get-Content -Raw -LiteralPath "dist/$name.sha256").Trim()
+            if ($checksum -cne "$expectedHash  $name") { throw "Checksum sidecar mismatch: $name" }
+          }
+          $metadata = Get-Content -Raw -LiteralPath "dist/$prefix-setup.exe.json" | ConvertFrom-Json
+          if ($metadata.version -cne $env:PROJECT_VERSION -or $metadata.sha256 -cne $installer.installerSha256 -or
+              $metadata.payloadZipSha256 -cne $installer.packageSha256 -or
+              $metadata.sha256 -cne ($files | Where-Object name -eq "$prefix-setup.exe").sha256 -or
+              $metadata.payloadZipSha256 -cne ($files | Where-Object name -eq "$prefix.zip").sha256) {
+            throw 'Installer metadata, validated payload and release files disagree.'
+          }
+          $lock = Get-Content -Raw -LiteralPath deps/dependencies.lock.json | ConvertFrom-Json
+          $ctest = Get-Content -Raw -LiteralPath logs/ci/ctest-tests.json | ConvertFrom-Json
+          $load = Get-Content -Raw -LiteralPath logs/ci/load-verification.json | ConvertFrom-Json
+          $commit = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Could not identify the built commit.' }
+          $report = [ordered]@{
+            schema = 1; version = $env:PROJECT_VERSION; commit = $commit; ref = $env:GITHUB_REF
+            run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            generatedAtUtc = [DateTime]::UtcNow.ToString('o'); runner = 'windows-2022'
+            obsVersion = $lock.obsVersion; qtVersion = $lock.qtVersion
+            ctest = [ordered]@{ passed = $true; count = @($ctest.tests).Count; tests = @($ctest.tests.name) }
+            dllLoad = [ordered]@{ passed = $load.loaded; moduleApi = $load.moduleApi; scope = $load.scope }
+            installer = [ordered]@{ passed = $installer.passed; count = @($installer.tests).Count
+              tests = @($installer.tests | Select-Object name, passed, seconds); scope = $installer.scope }
+            sources = [ordered]@{ qtBaseArchive = $qtArchives[0]; buildRecipesArchive = $recipeArchives[0] }
+            files = $files
+            limitations = 'Synthetic offline checks only. No account login, real streaming, room edits, or long-duration media validation.'
+          }
+          $report | ConvertTo-Json -Depth 8 |
+            Set-Content -LiteralPath "dist/$prefix-validation.json" -Encoding utf8
+          "Windows x64 ${env:PROJECT_VERSION}: $(@($ctest.tests).Count) CTest tests, DLL load check, and $(@($installer.tests).Count) installer cases passed." |
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload verified release assets
+        id: assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/livehime-obs-${{ steps.version.outputs.version }}-windows-x64.zip
+            dist/livehime-obs-${{ steps.version.outputs.version }}-windows-x64.zip.sha256
+            dist/livehime-obs-${{ steps.version.outputs.version }}-windows-x64-setup.exe
+            dist/livehime-obs-${{ steps.version.outputs.version }}-windows-x64-setup.exe.sha256
+            dist/livehime-obs-${{ steps.version.outputs.version }}-windows-x64-setup.exe.json
+            dist/livehime-obs-${{ steps.version.outputs.version }}-windows-x64-validation.json
+            dist/qtbase-everywhere-src-*.zip
+            dist/qtbase-everywhere-src-*.zip.sha256
+            dist/obs-deps-*.zip
+            dist/obs-deps-*.zip.sha256
+            dist/qt-source-provenance.json
+            dist/qt-source-provenance.json.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload diagnostic logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            logs/ci/
+            build/Testing/Temporary/*.log
+            build/CMakeFiles/CMakeConfigureLog.yaml
+            build/installer-validation/**/validation.json
+            build/installer-validation/**/logs/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    name: Publish verified tag release
+    needs: build
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      # This job does not check out or run repository scripts with a write token.
+      - name: Download this run's verified assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: release-assets
+          merge-multiple: true
+          digest-mismatch: error
+
+      - name: Verify asset hashes and source commit
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+$' -or
+              $env:GITHUB_REF_NAME -cne "v$env:RELEASE_VERSION") { throw 'Release tag/version mismatch.' }
+          $prefix = "livehime-obs-$env:RELEASE_VERSION-windows-x64"
+          $reportName = "$prefix-validation.json"
+          $report = Get-Content -Raw -LiteralPath "release-assets/$reportName" | ConvertFrom-Json
+          $qtArchive = $report.sources.qtBaseArchive
+          $recipesArchive = $report.sources.buildRecipesArchive
+          if ($qtArchive -cnotmatch '^qtbase-everywhere-src-\d+\.\d+\.\d+\.zip$' -or
+              $recipesArchive -cnotmatch '^obs-deps-[0-9a-f]{40}\.zip$') { throw 'Invalid source archive names.' }
+          $expected = @("$prefix.zip", "$prefix.zip.sha256", "$prefix-setup.exe",
+                        "$prefix-setup.exe.sha256", "$prefix-setup.exe.json", $qtArchive, "$qtArchive.sha256",
+                        $recipesArchive, "$recipesArchive.sha256", 'qt-source-provenance.json', 'qt-source-provenance.json.sha256')
+          if ($report.version -cne $env:RELEASE_VERSION -or $report.commit -cne $env:GITHUB_SHA -or
+              !$report.ctest.passed -or !$report.dllLoad.passed -or !$report.installer.passed -or
+              $report.ctest.count -lt 6 -or $report.installer.count -lt 14 -or
+              @($report.files).Count -ne $expected.Count) { throw 'Invalid release validation report.' }
+          $actualNames = @(Get-ChildItem -LiteralPath release-assets -File | Select-Object -ExpandProperty Name)
+          if (@(Compare-Object ($expected + $reportName) $actualNames).Count -ne 0) {
+            throw 'The downloaded release contains unexpected or missing files.'
+          }
+          foreach ($name in $expected) {
+            $records = @($report.files | Where-Object name -CEQ $name)
+            $actual = (Get-FileHash -LiteralPath "release-assets/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($records.Count -ne 1 -or $actual -cne $records[0].sha256) { throw "Asset verification failed: $name" }
+          }
+          @(
+            "Windows x64 plugin for OBS Studio $($report.obsVersion) / Qt $($report.qtVersion).",
+            '',
+            'Close OBS, run the setup EXE, and select the existing OBS root directory. The ZIP is available for manual installation.',
+            '',
+            "Validated by CI: $($report.ctest.count) CTest tests, DLL dependency/export checks, and $($report.installer.count) isolated installer cases.",
+            'These checks do not validate real-account streaming or room changes. The binaries are not Authenticode signed.',
+            '',
+            'The matching Qt Base source archive, OBS dependency build recipes, provenance and checksums are included for the bundled Schannel TLS backend.',
+            '',
+            "Commit: $env:GITHUB_SHA",
+            "Validation run: $($report.run)"
+          ) | Set-Content -LiteralPath release-notes.md -Encoding utf8
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:GITHUB_REF_NAME
+          $repository = $env:GITHUB_REPOSITORY
+          $remoteCommit = & gh api "repos/$repository/commits/$tag" --jq .sha
+          if ($LASTEXITCODE -ne 0 -or $remoteCommit.Trim() -cne $env:GITHUB_SHA) {
+            throw 'The remote tag no longer points to the tested commit.'
+          }
+          $assets = @(Get-ChildItem -LiteralPath release-assets -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
+          $existingJson = & gh release view $tag --repo $repository --json isDraft,assets 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $existing = $existingJson | ConvertFrom-Json
+            if (!$existing.isDraft) { throw 'This release is already published; existing published assets are not overwritten.' }
+            $allowedNames = @($assets | ForEach-Object { [IO.Path]::GetFileName($_) })
+            if (@($existing.assets | Where-Object { $_.name -notin $allowedNames }).Count -ne 0) {
+              throw 'The existing draft contains other assets; review it before retrying.'
+            }
+            & gh release upload $tag @assets --repo $repository --clobber
+          } else {
+            & gh release create $tag @assets --repo $repository --verify-tag --draft `
+              --title "Livehime OBS $env:RELEASE_VERSION" --notes-file release-notes.md
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Release asset upload failed; any created release remains a draft.' }
+          & gh release edit $tag --repo $repository --draft=false --notes-file release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the verified release draft.' }

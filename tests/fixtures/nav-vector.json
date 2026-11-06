@@ -1,0 +1,14 @@
+{
+  "source_sha256": "451a5bda9664c2ab5e43a451398005112d4ae2085eb15b765152e9a99f6f77cb",
+  "entry": "0x2010ca0",
+  "contract": "AccountRequestCommonParams 0x2021b00; NavUserInfoRequest 0x2020640",
+  "params": {
+    "appkey": "aae92bc66f3edfab",
+    "platform": "pc_link",
+    "ts": "1700000000"
+  },
+  "signed_bytes": "appkey=aae92bc66f3edfab&platform=pc_link&ts=1700000000",
+  "native_sign": "acba67594101b34446bcfd64e2cc1036",
+  "url": "https://api.bilibili.com/x/web-interface/nav?appkey=aae92bc66f3edfab&platform=pc_link&sign=acba67594101b34446bcfd64e2cc1036&ts=1700000000",
+  "matched": true
+}

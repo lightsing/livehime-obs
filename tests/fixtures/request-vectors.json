@@ -1,0 +1,30 @@
+{
+  "scope": "Synthetic inputs only; HTTP construction from static evidence, signing compared with original machine code",
+  "passed": 3,
+  "results": [
+    {
+      "operation": "title",
+      "url": "https://api.live.bilibili.com/xlive/app-blink/v1/preLive/UpdatePreLiveInfo?access_key=&appkey=aae92bc66f3edfab&build=10819&platform=pc_link&sign=7e9835cdbc93167da1f313d0a2050c96&ts=1700000000&version=7.64.0.10819",
+      "body": "access_key=&appkey=aae92bc66f3edfab&build=10819&csrf=synthetic-csrf&csrf_token=synthetic-csrf&mobi_app=pc_link&platform=pc_link&sign=7e9835cdbc93167da1f313d0a2050c96&title=%E6%B5%8B%E8%AF%95%20!%2B%26%3D%20%F0%9F%8E%AE&ts=1700000000&version=7.64.0.10819",
+      "signed_bytes": "access_key=&appkey=aae92bc66f3edfab&build=10819&platform=pc_link&ts=1700000000&version=7.64.0.10819",
+      "native_sign": "7e9835cdbc93167da1f313d0a2050c96",
+      "matched": true
+    },
+    {
+      "operation": "start",
+      "url": "https://api.live.bilibili.com/room/v1/Room/startLive",
+      "body": "access_key=&appkey=aae92bc66f3edfab&area_v2=1&build=10819&csrf=synthetic-csrf&csrf_token=synthetic-csrf&platform=pc_link&room_id=12345&sign=624401f1a1dd9a8a5a9f9bad8f0a1813&ts=1700000000&type=2&version=7.64.0.10819",
+      "signed_bytes": "access_key=&appkey=aae92bc66f3edfab&area_v2=1&build=10819&csrf=synthetic-csrf&csrf_token=synthetic-csrf&platform=pc_link&room_id=12345&ts=1700000000&type=2&version=7.64.0.10819",
+      "native_sign": "624401f1a1dd9a8a5a9f9bad8f0a1813",
+      "matched": true
+    },
+    {
+      "operation": "stop",
+      "url": "https://api.live.bilibili.com/room/v1/Room/stopLive",
+      "body": "access_key=&appkey=aae92bc66f3edfab&build=10819&csrf=synthetic-csrf&csrf_token=synthetic-csrf&platform=pc_link&room_id=12345&sign=1022fdd89a2fa7fd198fca1e12a5bd00&ts=1700000000&version=7.64.0.10819",
+      "signed_bytes": "access_key=&appkey=aae92bc66f3edfab&build=10819&platform=pc_link&room_id=12345&ts=1700000000&version=7.64.0.10819",
+      "native_sign": "1022fdd89a2fa7fd198fca1e12a5bd00",
+      "matched": true
+    }
+  ]
+}

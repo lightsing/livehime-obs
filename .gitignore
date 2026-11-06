@@ -1,0 +1,14 @@
+/build/
+/.deps/
+/.tools/
+/dist/
+/validation/
+/logs/
+*.user
+*.suo
+*.dpapi
+/login-browser/
+/device-id
+*.log
+.env
+.env.*

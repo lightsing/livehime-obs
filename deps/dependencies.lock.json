@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "obsVersion": "33.0.1",
+  "qtVersion": "6.11.1",
+  "qtBundleVersion": "2026-10-23",
+  "webView2Version": "1.0.4314.35",
+  "platform": "windows-x64",
+  "bundledRuntimeComponents": [
+    {
+      "id": "qt-schannel-backend",
+      "version": "6.11.1",
+      "sourceArtifact": "qt",
+      "path": "qt6-2026-10-23/plugins/tls/qschannelbackend.dll",
+      "sha256": "0d1a73019c732551f3b1fca1391435fc1f7e551e50cd22d2b273d0495e7ff3dd",
+      "qtSourceVersion": "6.11.1",
+      "qtSourceArchiveSha256": "3529cc37297a5a7aae4486843b9fd41c30df1d79a770f85e240b537dcc327ca5",
+      "obsDepsSourceCommit": "cbf0a3d8a0a34c07e822bda22a5f8214f91801d7"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "obs-source",
+      "file": "obs-studio-33.0.1.zip",
+      "url": "https://github.com/obsproject/obs-studio/archive/refs/tags/33.0.1.zip",
+      "sha256": "0f228b960c099c6f6bca9f09a0c3516f14fdf1dd96e1d4702145c5d3ba8cba31",
+      "extractDirectory": ".",
+      "marker": "obs-studio-33.0.1/libobs/obs.h"
+    },
+    {
+      "id": "qt",
+      "file": "windows-deps-qt6-2026-10-23-x64.zip",
+      "url": "https://github.com/obsproject/obs-deps/releases/download/2026-10-23/windows-deps-qt6-2026-10-23-x64.zip",
+      "sha256": "78cd7a138464bb6edcdd3b85fcd63a5a7c69e369629963f3bc395bab74fb3f47",
+      "extractDirectory": "qt6-2026-10-23",
+      "marker": "qt6-2026-10-23/lib/cmake/Qt6/Qt6Config.cmake"
+    },
+    {
+      "id": "webview2",
+      "file": "microsoft.web.webview2.1.0.4314.35.nupkg",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4314.35/microsoft.web.webview2.1.0.4314.35.nupkg",
+      "sha256": "90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4",
+      "extractDirectory": "webview2",
+      "marker": "webview2/build/native/include/WebView2.h"
+    }
+  ],
+  "sources": {
+    "obsQtPin": "https://github.com/obsproject/obs-studio/blob/33.0.1/CMakePresets.json",
+    "obsRelease": "https://github.com/obsproject/obs-studio/releases/tag/33.0.1",
+    "webView2": "https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.4314.35"
+  }
+}

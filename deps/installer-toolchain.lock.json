@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "id": "innosetup",
+  "version": "7.1.1",
+  "platform": "windows-x64",
+  "installDirectory": "innosetup-7.1.1",
+  "compiler": "ISCC.exe",
+  "publisher": "Pyrsys B.V.",
+  "artifact": {
+    "file": "innosetup-7.1.1-x64.exe",
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe",
+    "sha256": "8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0",
+    "size": 14336568
+  },
+  "sources": {
+    "release": "https://github.com/jrsoftware/issrc/releases/tag/is-7_1_1",
+    "digest": "https://api.github.com/repos/jrsoftware/issrc/releases/assets/686090386",
+    "installerSource": "https://github.com/jrsoftware/issrc/blob/is-7_1_1/setup.iss",
+    "portableSource": "https://github.com/jrsoftware/issrc/blob/is-7_1_1/isportable.iss",
+    "commandLine": "https://jrsoftware.org/ishelp/topic_setupcmdline.htm"
+  }
+}
