@@ -79,7 +79,9 @@ try {
         $source = Join-Path $projectRoot "validation\$name"
         if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $evidence }
     }
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'validation\realtime-ui') -Destination $evidence -Recurse
+    if (Test-Path -LiteralPath (Join-Path $projectRoot 'validation\realtime-ui')) {
+        Copy-Item -LiteralPath (Join-Path $projectRoot 'validation\realtime-ui') -Destination $evidence -Recurse
+    }
     $files = @(Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName | ForEach-Object {
         [ordered]@{
             path = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/')
