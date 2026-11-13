@@ -30,14 +30,17 @@ public:
     void uploadCover(const QString &filePath, Callback<QUrl> callback);
     void startLive(qint64 roomId, int areaId, Callback<LiveSession> callback);
     void stopLive(qint64 roomId, Callback<Done> callback);
+    QNetworkReply *fetchRealtime(const protocol::Request &request, Callback<QJsonObject> callback);
+    void cancelRealtime(QNetworkReply *reply);
 
 signals:
     void cookiesChanged();
+    void authenticationExpired();
 
 private:
     void cancelRequests();
     QByteArray csrf() const;
-    void send(const protocol::Request &request, Callback<QJsonObject> callback,
+    QNetworkReply *send(const protocol::Request &request, Callback<QJsonObject> callback,
               QHttpMultiPart *multipart = nullptr, bool web = false);
     void anonymousGet(const QUrl &url, Callback<QByteArray> callback, qint64 maxBytes,
                       const QByteArray &accept);

@@ -222,6 +222,28 @@ void cookieAndUrlBoundaries()
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
+    {
+        const auto danmu = p::danmuInfo(123, 1700000000);
+        const auto query = danmu.url.query(QUrl::FullyEncoded).toUtf8();
+        check(danmu.method == "GET" && danmu.body.isEmpty() && query.contains("access_key=&") &&
+              query.contains("is_anchor=true") && query.contains("user_type=0") && !query.contains("build="),
+              "anchor danmu GET exact common and credential scope");
+        p::Params params = p::common(1700000000);
+        params.erase("build"); params["room_id"] = "123"; params["user_type"] = "0"; params["is_anchor"] = "true";
+        check(query.endsWith("version=7.64.0.10819") && query.contains("sign=" + p::signature(params)), "danmu signs all business fields");
+        for (const auto &pair : QList<QPair<QString, QString>>{{"online_rank", "contribution_rank"}, {"online_rank", "entry_time_rank"},
+            {"daily_rank", "today_rank"}, {"daily_rank", "yesterday_rank"}, {"weekly_rank", "current_week_rank"},
+            {"weekly_rank", "last_week_rank"}, {"monthly_rank", "current_month_rank"}, {"monthly_rank", "last_month_rank"}, {"intimacy_rank", "intimacy_rank"}}) {
+            const auto rank = p::contributionRank(9, 123, pair.first, pair.second, 1700000000);
+            check(rank.body.isEmpty() && rank.signedBytes.contains("page_size=100") && rank.signedBytes.contains("room_id=123") &&
+                rank.signedBytes.contains("switch=" + pair.second.toUtf8()) && !rank.signedBytes.contains("sign="), "rank unsigned input carries selected mode and page size");
+        }
+        const auto guard = p::guardRank(9, 123, 5, 2, 1700000000);
+        check(guard.signedBytes.contains("roomid=123") && guard.signedBytes.contains("typ=5") &&
+            guard.signedBytes.contains("page=2") && guard.signedBytes.contains("page_size=30"), "guard exact spelling and mode pagination");
+        const auto parsed = p::parseRoom(object(R"({"room_id":123,"room_rank_info":{"count":42}})"));
+        check(std::holds_alternative<RoomInfo>(parsed) && std::get<RoomInfo>(parsed).rankInfo.value("count").toInt() == 42, "room rank config preserved independently from rank data.config");
+    }
     try {
         originalMachineCodeVectors();
         responseFixtures();

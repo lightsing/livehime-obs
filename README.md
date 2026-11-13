@@ -1,28 +1,24 @@
 # Livehime OBS · Windows
 
-[![Windows CI](https://github.com/lightsing/livehime-obs/actions/workflows/windows.yml/badge.svg)](https://github.com/lightsing/livehime-obs/actions/workflows/windows.yml)
-[![Release](https://img.shields.io/github/v/release/lightsing/livehime-obs)](https://github.com/lightsing/livehime-obs/releases)
-
 在 OBS 的「B站直播」面板内扫码登录、自动同步直播标题、裁切上传主封面，并使用 OBS 原生「开始直播 / 停止直播」按钮开播与下播。OBS 使用 B 站开播响应中返回的 RTMP 地址直接推流，不需要运行直播姬或本地中转服务。
 
-这是基于直播姬 **7.64.0.10819** 协议分析实现的首个版本，面向 **Windows x64 + OBS Studio 33.0.1（Qt 6.11.1）**。已在独立 OBS 中验证用户扫码、登录恢复、房间信息读取、分区名称搜索和当前封面显示。真实开播授权、标题封面修改、音视频效果及长时间推流仍需实际使用验证；离线测试不代表平台已经接受这些操作。
+0.2.0 增加直播互动、房间观众和大航海三个独立浮窗，基于直播姬 **7.64.0.10819** 协议分析实现，面向 **Windows x64 + OBS Studio 33.0.1（Qt 6.11.1）**。已在独立 OBS 中验证用户扫码、登录恢复、房间信息读取、分区名称搜索和当前封面显示。真实开播授权、标题封面修改、音视频效果及长时间推流仍需实际使用验证；离线测试不代表平台已经接受这些操作。
 
-## 安装
+## 安装与直接升级
 
-1. 关闭所有 OBS 实例。
-2. 从 [Releases](https://github.com/lightsing/livehime-obs/releases) 下载 `livehime-obs-0.1.0-windows-x64-setup.exe` 并运行，接受 Windows 管理员授权。向导提供简体中文和英文，自动识别 OBS 安装目录，也可手动选择，用于检查 OBS 33.0.1 x64 与 Qt 6.11.1。
-3. 启动 OBS，在「停靠窗口 / Docks」菜单启用「B站直播」。
-4. 如果扫码窗口提示缺少运行时，安装或修复 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。Windows 11 通常已经具备此运行时。
+0.2.1 修复了安装器把 **OBS 安装目录**和**插件安装目录**混为一谈而阻止升级的问题。已登记的 0.1 现代独立插件安装、0.2 OBS 根目录安装都可直接原位升级；保留原安装范围、插件布局与位置、账号配置和同一份卸载日志，不需要先卸载。
 
-标准安装器将插件放入 **`C:\ProgramData\obs-studio\plugins\livehime-obs`**，这是所有用户共享的独立插件目录，不提供“当前用户 / 所有用户”选择。DLL 位于该目录根部，资源位于 `data`，说明和许可位于 `data/docs`。共享插件安装、升级与卸载前要求退出所有 OBS；安装程序只提示关闭，不结束 OBS 进程。用户各自的登录缓存、场景和配置仍保存在各自 OBS 配置目录。
+1. 关闭 OBS。标准共享插件可能被多个 OBS 使用，请退出所有 OBS 实例。
+2. 运行 `dist/livehime-obs-0.2.2-windows-x64-setup.exe`。已有安装会恢复原安装范围与路径，跳过插件目录选择页；无需把插件目录改成 OBS 根目录。
+3. OBS 目录页应选择包含 `bin\64bit\obs64.exe` 的目录，例如 `C:\Program Files\obs-studio`，用于核验 OBS 33.0.1 x64 / Qt 6.11.1。它与插件目录是两个不同位置。
+4. **首次安装**随后选择独立插件目录，标准位置为 `C:\ProgramData\obs-studio\plugins\livehime-obs`，通常保留默认值。DLL 在该目录根部，资源位于 `data`，卸载器位于 `installer`。便携 OBS 可选其 `plugins\livehime-obs`。用户可写目录可选择仅为当前用户安装；共享或受保护目录需要管理员权限。
+5. 启动 OBS，在「停靠窗口 / Docks」菜单启用「B站直播」。若登录窗口缺少运行时，安装或修复 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。
 
-同版本重装可以修复插件文件，且不会产生重复卸载项；升级保留原插件目录和关联的 OBS 目录。卸载入口位于 Windows「已安装的应用」中的 **Livehime OBS**，仅移除安装器登记的文件，保留场景、配置、其他插件和登录缓存。
+升级已有 0.2 根目录布局时，文件继续位于原 `obs-plugins\64bit` 与 `data\obs-plugins\livehime-obs`，不会自动迁移或创建第二份插件。只在主动更换安装范围或移到另一套 OBS 时才需要先卸载。卸载仅移除已登记载荷，保留 OBS 场景、配置、其他插件与本插件登录缓存。
 
-如果装过旧版安装器，先卸载旧版，再安装标准目录版本。手动安装过 ZIP 的用户应先移走 OBS 根目录 `obs-plugins/64bit/livehime-obs.dll`，避免加载重复副本；不要删除 OBS 用户配置。安装器发现旧版或重复副本会给出路径，要求先处理。
+仍提供 `dist/livehime-obs-0.2.2-windows-x64.zip` 供手动维护：其中 `obs-plugins` 与 `data` 是 **OBS 根目录旧布局**，不是现代独立插件目录结构。已有现代安装请使用安装器升级，不要把 ZIP 合并进现代 bundle，也不要同时保留两种活动副本。未登记的手工旧布局不会被新版安装器自动迁移；可继续按原 ZIP 布局手动更新。
 
-Releases 还提供 `livehime-obs-0.1.0-windows-x64.zip`，保留旧目录结构供便携 OBS 手动安装：将其中 `obs-plugins` 和 `data` 合并到便携 OBS 根目录。普通安装版建议使用 EXE；不要同时安装 ZIP 与 EXE 两份插件。
-
-安装包只在插件私有数据目录携带匹配 Qt 6.11.1 的 Schannel TLS 后端，用于 HTTPS。其他 OBS 主版本或 Qt 版本应重新构建，不能直接假定 ABI 兼容。当前安装器尚未做 Authenticode 代码签名，旁边提供 `.sha256` 和 `.json` 记录包与 DLL 的校验值；这不等同于发布者签名。
+安装器不会覆盖 OBS 主程序和 Qt 主运行库，不会自动结束 OBS 进程。只在插件私有数据目录携带匹配 Qt 6.11.1 的 Schannel TLS 后端；其他 OBS / Qt 版本需重新构建。安装器未做 Authenticode 签名，旁边的 `.sha256` 与 `.json` 提供包和 DLL 校验信息。
 
 ## 使用
 
@@ -41,6 +37,18 @@ Releases 还提供 `livehime-obs-0.1.0-windows-x64.zip`，保留旧目录结构�
 
 请先下播成功，再退出 OBS。进程强制关闭、崩溃或断电时无法保证发送下播请求；再次登录后可刷新房间，并结束尚未关闭的直播。未结束当前场次前不能退出登录或切换账号；会话失效时可以重新登录原账号。
 
+## 三个实时面板
+
+从 B 站面板按钮、OBS「工具」或原生「停靠窗口 / Docks」菜单打开三个面板。0.2.2 支持拖动标题栏停靠、标签合并和独立浮动，也可用面板中的「停靠到 OBS / 浮动窗口」切换。关闭仅隐藏，重新打开复用同一面板；OBS 保存停靠位置、标签和浮动布局，移除显示器后浮窗会回到可见区域。
+
+- **直播互动**：统计条、礼物流水、主弹幕与进房/关注/分享/点赞分区。礼物兼容 JSON 与新版 protobuf 事件，流水可拆分/合回，设置支持字号、头像、身份与勋章文字、礼物币种、分区显隐、悬停暂停滚动。锁定穿透仅在浮动状态启用。点击 B站直播主面板的「解除互动穿透」、重新打开「直播互动」，或使用 OBS 工具菜单的解锁入口，均可恢复鼠标操作。停靠、隐藏、关闭或重启都会清除锁定；停靠时禁用置顶、穿透与透明度，避免影响 OBS 主窗口。
+- **房间观众**：使用房间接口返回的标题与切换项，支持在线榜的贡献值/进房时间、独立亲密榜、今日/昨日、本周/上周、本月/上月，共 9 个组合。平台配置默认关闭的历史入口仍可选择；默认状态不等于权限不足。
+- **大航海**：周榜、月榜、陪伴榜的亲密度/陪伴天数，支持继续加载。切换模式隔离分页，不用购买提示推算成员名单。
+
+三窗共用本插件登录、房间和单个弹幕连接。无需先开播；断线只影响实时展示。榜单在可见时合并通知并按 10–20 秒节流刷新；大航海已加载多页时暂停自动刷新，手动刷新会从第一页重新载入。匿名身份不显示真实昵称或头像，远程头像经无 Cookie 的限流缓存下载。心跳数据不显示为在线/看过人数。
+
+本版完成核心展示与榜单，未实现发送弹幕、语音播报、礼物动画或房间权限管理。显示来自事件和接口；没有有效统计来源时不会累加礼物伪造收益。原版像素对照受当前桌面工具限制，合成 Qt 截图用于布局验收，不能当作原版截图。
+
 ## 登录信息与日志
 
 - 插件只使用自己的 WebView2 登录会话，不读取直播姬或现有浏览器的账号文件。
@@ -48,50 +56,34 @@ Releases 还提供 `livehime-obs-0.1.0-windows-x64.zip`，保留旧目录结构�
 - `device-id` 是该插件生成并持久保存的设备标识，与 Cookie `buvid3` 分开处理。
 - 启动时复验会话；失效后重新扫码。此版本没有实现网页登录令牌自动续期。
 - 本场推流密钥保留在进程内，插件不调用 OBS 保存服务配置的接口，也不记录 Cookie、请求体或推流密钥。直播过程中请勿主动在 OBS 推流设置中保存本场临时服务。
-- 分区列表与封面预览使用独立的匿名网络通路，不向图片 CDN 发送账号 Cookie 或设备标识。
+- 分区列表、封面预览与头像使用独立的匿名网络通路，不向图片 CDN 发送账号 Cookie 或设备标识。
 - 退出登录删除插件保存的会话。卸载插件不自动删除 OBS 插件配置目录。
 
 ## 从源码构建
 
-需要 Visual Studio 2022 的 C++ 桌面开发组件、Windows SDK、CMake 3.28+ 和 PowerShell 7。以下命令下载固定版本的官方 OBS 归档供编译和测试使用，无需提前安装 OBS。
+需要 Visual Studio 2022 的 C++ 桌面开发组件、Windows SDK、CMake 3.28+、PowerShell 7，以及安装在本机的 OBS 33.0.1 x64。
 
 ```powershell
-git clone https://github.com/lightsing/livehime-obs.git
-Set-Location livehime-obs
-$obsRoot = & .\scripts\bootstrap-obs.ps1
-.\scripts\build.ps1 -ObsRoot $obsRoot
-.\scripts\verify-load.ps1 -ObsRoot $obsRoot
+Set-Location D:\workspace\livehime-obs
+.\scripts\build.ps1
+.\scripts\verify-load.ps1
 .\scripts\package.ps1
 .\scripts\build-installer.ps1
-.\scripts\test-installer.ps1 -InstallerPath .\dist\livehime-obs-0.1.0-windows-x64-setup.exe
 ```
 
-`bootstrap-obs.ps1` 按 `deps/obs-runtime.lock.json` 下载并校验官方 OBS 归档，解压到项目 `.deps`，不启动或安装 OBS。`build.ps1` 按 `deps/dependencies.lock.json` 下载并验证 SHA-256：OBS 对应版本头文件、OBS 官方 Qt 开发包、Microsoft WebView2 SDK。OBS 导入库从指定的同版本 DLL 导出表生成；不需要重新编译整个 OBS。默认 `RelWithDebInfo`、x64、单节点编译，调试信息嵌入对象文件以避免共享 PDB 服务限制。
+`build.ps1` 按 `deps/dependencies.lock.json` 下载并验证 SHA-256：OBS 对应版本头文件、OBS 官方 Qt 开发包、Microsoft WebView2 SDK；按 `deps/goim-codecs.lock.json` 固定 zlib 1.4 和 Brotli 1.2.1 源码并静态编译，不安装额外解压 DLL。OBS 导入库从本机同版本 DLL 的导出表生成；不需要重新编译整个 OBS。默认 `RelWithDebInfo`、x64、单节点编译，调试信息嵌入对象文件以避免共享 PDB 服务限制。
 
-也可以使用本机已经安装的匹配版本 OBS。已有依赖归档时加 `-Offline` 避免再次下载：
+可以指定已有依赖目录，减少重复下载：
 
 ```powershell
-.\scripts\build.ps1 -ObsRoot 'C:\Program Files\obs-studio' -DependenciesRoot .\.deps -Offline
+.\scripts\build.ps1 -DependenciesRoot D:\REA\livehime-obs-deps -SkipBootstrap
 ```
 
 构建完成后，DLL 位于 `build/RelWithDebInfo/livehime-obs.dll`，ZIP 位于 `dist/`。`verify-load.ps1` 验证依赖加载与 OBS 模块导出，不会登录账号或开播。
 
-`build-installer.ps1` 从已生成的同版本 ZIP 中校验并提取四个运行时文件，将同一组字节映射为独立插件目录，再用 Inno Setup 7.1.1 编译标准安装器。`bootstrap-installer.ps1` 按 `deps/installer-toolchain.lock.json` 下载官方构建工具，校验 SHA-256 与发布者签名，以便携模式安装到项目 `.tools`；不设置文件关联或系统 PATH。可用 `-ToolsRoot .\.tools -Offline` 复用已验证缓存。安装脚本位于 `installer/livehime-obs.iss`。
+`build-installer.ps1` 从已生成的同版本 ZIP 中校验并提取四个运行时文件，再用 Inno Setup 7.1.1 编译标准安装器。`bootstrap-installer.ps1` 按 `deps/installer-toolchain.lock.json` 下载官方构建工具，校验 SHA-256 与发布者签名，以便携模式安装到项目 `.tools`；不设置文件关联或系统 PATH。可用 `-ToolsRoot D:\REA\tools -Offline` 复用已验证缓存。安装脚本位于 `installer/livehime-obs.iss`。
 
-安装器离线验收使用 `scripts/test-installer.ps1 -InstallerPath <setup.exe>`，生成合成的 OBS 宿主和账号哨兵，在独立目录以当前用户模式测试安装、升级、版本拒绝、运行中保护和卸载；不向真实 OBS 安装插件。测试日志保留在指定的 `-Workspace` 中。
-
-## CI 与自动发布
-
-[Windows 工作流](.github/workflows/windows.yml) 在推送到 `main`、提交 Pull Request 和手动触发时执行：下载并校验依赖、编译、运行 6 组 CTest、检查 DLL 加载、生成 ZIP 和 EXE，以及运行 28 组安装器验收。成功构建的安装包和验证记录可从 Actions artifacts 下载；真实账号登录和推流不属于 CI。
-
-发布新版本时，先修改 `CMakeLists.txt` 中的项目版本并更新说明，提交到 `main`，等待 CI 通过，再推送对应标签：
-
-```powershell
-git tag -a v0.1.0 -m 'Livehime OBS 0.1.0'
-git push origin v0.1.0
-```
-
-标签版本必须与 CMake 项目版本一致。标签工作流重新构建并完成全部验证后，自动创建 GitHub Release，上传安装器、ZIP、SHA-256 校验文件、构建元数据与验收报告。发布使用仓库内置的 `GITHUB_TOKEN`，无需额外配置个人访问令牌；只有发布作业具有 `contents: write` 权限。下载依赖使用固定版本和 SHA-256，GitHub Actions 使用固定提交并由 Dependabot 提交更新。
+安装器离线验收使用 `scripts/test-installer.ps1 -InstallerPath <setup.exe>`，生成合成的 OBS 宿主和账号哨兵，在独立目录以当前用户模式测试安装、升级、版本拒绝、运行中保护和卸载；不向真实 OBS 安装插件。测试日志保留在指定的 `-Workspace` 中。若已有正式安装登记，可用 `build-installer.ps1 -FixtureIdentity` 生成明确带 `-fixture` 后缀的测试安装器，再给 `test-installer.ps1` 同时传 `-FixtureIdentity`，通过独立测试 GUID 完成矩阵，不改正式安装；该测试安装器不作为发行产物。
 
 ## 实现与验证
 
@@ -105,6 +97,8 @@ git push origin v0.1.0
 | `src/obs-bridge.*` | 临时 RTMP 服务、输出事件、恢复原服务 |
 | `src/native-stream-controls.*` | 接管原生开停播按钮、联动状态与恢复原信号连接 |
 | `src/room-dock.*` | OBS 停靠面板 |
+| `src/room-realtime.*`、`src/goim-*` | 共用房间、只读榜单调度、TCP 分帧/解压/认证/心跳/重连 |
+| `src/floating-windows.*`、`src/display-asset-cache.*` | 可停靠/浮动面板、有限列表模型、本地过滤与匿名头像缓存 |
 | `src/cover-crop-dialog.*` | 拖动与缩放封面，输出固定 4:3 裁切结果 |
 
 离线测试使用合成数据，覆盖签名向量、请求字段及顺序、Cookie 范围、响应错误、RTMP 选择、DPAPI 往返与损坏文件，以及真实控制器在替身网络 / OBS 后端上的开停播时序。测试不接触真实账号、不修改平台房间、不推送音视频。
@@ -113,4 +107,4 @@ git push origin v0.1.0
 
 ## 许可
 
-作者与维护者：[lightsing](https://github.com/lightsing)，详见 [AUTHORS.md](AUTHORS.md)。项目代码按 GPL-2.0-or-later 发布，见 `LICENSE`。第三方组件与链接见 `THIRD-PARTY-NOTICES.md` 和 `deps/README.md`。本项目为独立实现，不附带直播姬二进制，不代表哔哩哔哩官方产品。
+项目代码按 GPL-2.0-or-later 发布，见 `LICENSE`。第三方组件与链接见 `THIRD-PARTY-NOTICES.md` 和 `deps/README.md`。本项目为独立实现，不附带直播姬二进制，不代表哔哩哔哩官方产品。

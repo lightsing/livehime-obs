@@ -19,6 +19,7 @@ param(
     [Parameter(Mandatory)][string]$InstallerPath,
     [string]$Workspace = (Join-Path $PSScriptRoot '..\build\installer-validation'),
     [string]$PackagePath = '',
+    [switch]$FixtureIdentity,
     [ValidateRange(15, 600)][int]$InstallerTimeoutSeconds = 120
 )
 
@@ -50,6 +51,10 @@ if ($Workspace.TrimEnd('\') -eq [IO.Path]::GetPathRoot($Workspace).TrimEnd('\'))
 }
 
 $uninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{D39A69EF-8533-4CB2-8A13-770CBCA96340}_is1'
+if ($FixtureIdentity) {
+    if ([IO.Path]::GetFileName($InstallerPath) -notlike '*-fixture.exe') { throw 'FixtureIdentity requires the dedicated fixture installer.' }
+    $uninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{7F302FCE-7BA4-4ABE-92CF-62D0937D87AD}_is1'
+}
 $pluginData = 'data'
 $manifestRelative = "$pluginData/install-manifest.json"
 $uninstallerRelative = 'installer/unins000.exe'
@@ -605,7 +610,7 @@ try {
         }
     }
     $report = [ordered]@{
-        schema = 2; layout = 'obs-modern-bundle'; passed = ($null -eq $failure); workspace = $runRoot
+        schema = 2; layout = 'obs-modern-bundle'; passed = ($null -eq $failure); workspace = $runRoot; fixtureIdentity = [bool]$FixtureIdentity
         installer = $InstallerPath; installerSha256 = Get-Sha256 $InstallerPath
         package = $PackagePath; packageSha256 = Get-Sha256 $PackagePath
         tests = $results.ToArray(); invocations = $invocations.ToArray()

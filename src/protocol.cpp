@@ -179,6 +179,29 @@ Request preLive(qint64 now)
     return {"GET", withQuery(QString::fromLatin1(LiveApi) + "/xlive/app-blink/v1/preLive/PreLive", query),
             {}, serialize(p)};
 }
+Request danmuInfo(qint64 roomId, qint64 now)
+{
+    auto p = common(now);
+    p.erase("build"); // DanmuCommonRequestParams differs from room common.
+    p["room_id"] = QByteArray::number(roomId);
+    p["user_type"] = "0";
+    p["is_anchor"] = "true";
+    return {"GET", withQuery(QString::fromLatin1(LiveApi) + "/xlive/app-room/v1/index/getDanmuInfo", signedParams(p)), {}, serialize(p)};
+}
+Request contributionRank(qint64 uid, qint64 roomId, const QString &type, const QString &sort, qint64 now)
+{
+    auto p = common(now);
+    p["ruid"] = QByteArray::number(uid); p["room_id"] = QByteArray::number(roomId);
+    p["type"] = type.toUtf8(); p["switch"] = sort.toUtf8(); p["page"] = "1"; p["page_size"] = "100";
+    return {"GET", withQuery(QString::fromLatin1(LiveApi) + "/xlive/general-interface/v1/rank/queryContributionRank", signedParams(p)), {}, serialize(p)};
+}
+Request guardRank(qint64 uid, qint64 roomId, int typ, int page, qint64 now)
+{
+    auto p = common(now);
+    p["ruid"] = QByteArray::number(uid); p["roomid"] = QByteArray::number(roomId);
+    p["typ"] = QByteArray::number(typ); p["page"] = QByteArray::number(page); p["page_size"] = "30";
+    return {"GET", withQuery(QString::fromLatin1(LiveApi) + "/xlive/app-room/v2/guardTab/topListNew", signedParams(p)), {}, serialize(p)};
+}
 Request cover(const QUrl &location, const QByteArray &csrf, const QByteArray &visitId)
 {
     // Standalone web context: no native sign. This is the main 4:3 cover contract.
@@ -378,6 +401,7 @@ Result<QList<AreaInfo>> parseAreas(const QByteArray &json)
 Result<RoomInfo> parseRoom(const QJsonObject &data)
 {
     RoomInfo room;
+    room.rankInfo = data.value(QStringLiteral("room_rank_info")).toObject();
     room.roomId = integer(data.value(QStringLiteral("room_id")));
     if (room.roomId <= 0) return invalid(QStringLiteral("账号没有有效直播间，请先在哔哩哔哩开通直播。"));
     room.areaId = static_cast<int>(integer(data.value(QStringLiteral("area_v2_id"))));

@@ -3,8 +3,7 @@
 项目目前以 Windows x64、OBS Studio **33.0.1**、Qt **6.11.1** 为构建和运行基线。下载地址、固定版本和 SHA256 位于 `dependencies.lock.json`。PowerShell 7 的 `scripts/bootstrap-deps.ps1` 会逐个校验压缩包后再解压，不安装或覆盖 OBS。
 
 ```powershell
-$obsRoot = & ./scripts/bootstrap-obs.ps1
-./scripts/build.ps1 -ObsRoot $obsRoot -DependenciesRoot ./.deps
+pwsh -NoProfile -File scripts/build.ps1 -DependenciesRoot D:/REA/livehime-obs-deps
 pwsh -NoProfile -File scripts/package.ps1
 ```
 
@@ -12,7 +11,7 @@ pwsh -NoProfile -File scripts/package.ps1
 
 ## OBS 头文件和导入库
 
-本项目没有声称使用官方发布的独立 SDK 包。它使用官方 `33.0.1` 源码归档中的 `libobs` 和 `frontend/api` 公开头文件，以及指定的同版官方 `obs.dll` 和 `obs-frontend-api.dll` 的导出表。`obs-runtime.lock.json` 固定官方 Windows x64 ZIP，`bootstrap-obs.ps1` 校验后解压到 `.deps/obs-runtime-33.0.1`，供 CI 与本地无安装构建使用；也可以传入已有安装目录。
+本项目没有声称使用官方发布的独立 SDK 包。它使用官方 `33.0.1` 源码归档中的 `libobs` 和 `frontend/api` 公开头文件，以及本机同版官方 `obs.dll` 和 `obs-frontend-api.dll` 的导出表。
 
 `bootstrap-deps.ps1` 用 MSVC `dumpbin /EXPORTS` 生成 `.def`，再用 `lib /MACHINE:X64 /DEF` 生成导入库。不会重新编译 OBS，也不会把 OBS DLL 打入插件包。生成的 `obs-sdk-33.0.1-x64/sdk-manifest.json` 记录本机 DLL 的版本、SHA256 和导出数量，以便复核。`obsconfig.h` 只是公开头文件所需的 Windows 消费方配置，不是 OBS 的完整构建配置。
 
@@ -37,6 +36,6 @@ WebView2 使用 Microsoft NuGet 稳定包 **1.0.4314.35** 的公开头文件和 
 - Windows SDK 10.0.26100.0；CMake 最低版本 3.28，生成器 `Visual Studio 17 2022`。
 - C++20、动态发行版 MSVC CRT `/MD`、UTF-8 源码。
 
-手动 ZIP 使用 OBS 兼容的传统目录结构：`obs-plugins/64bit/livehime-obs.dll` 和 `data/obs-plugins/livehime-obs/`。`package.ps1` 仅创建压缩包与 SHA256 清单，不向 OBS 安装目录写入文件。`build-installer.ps1` 将校验后的同一组运行时文件映射为现代独立目录：`livehime-obs.dll` 与 `data/`；标准 EXE 将其安装到 `ProgramData/obs-studio/plugins/livehime-obs`，不向 OBS 程序目录部署载荷。
+包使用 OBS 支持的传统目录结构：`obs-plugins/64bit/livehime-obs.dll` 和 `data/obs-plugins/livehime-obs/`。`package.ps1` 仅创建压缩包与 SHA256 清单，不向 OBS 安装目录写入文件。
 
 手动排查 HTTPS 时，可运行 `scripts/probe-network.ps1 -ObsRoot <OBS目录>`。该命令使用实际 OBS QtNetwork.dll 和插件私有 TLS 目录，只向 `nav` 发一次不带 Cookie 的 GET，输出 Qt 运行库位置、TLS 后端、HTTP 状态和网络错误编号。它不读取会话，也不属于默认离线 CTest；正常匿名响应应为 HTTP 200、业务码 -101。

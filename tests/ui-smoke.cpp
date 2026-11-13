@@ -556,6 +556,18 @@ int main(int argc, char **argv)
     QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
     QApplication::setStyle(QStringLiteral("Fusion"));
+    {
+        QTemporaryDir recoveryDirectory;
+        RoomDock recoveryDock(recoveryDirectory.path());
+        bool requested = false;
+        QObject::connect(&recoveryDock, &RoomDock::unlockRealtimeInteraction, &recoveryDock, [&] { requested = true; });
+        auto *recovery = recoveryDock.findChild<QPushButton *>(QStringLiteral("realtime-unlock-interaction"));
+        check(recovery && recovery->isEnabled(), "main panel recovery entry remains available while signed out");
+        if (recovery) recovery->click();
+        check(requested, "main panel recovery button reaches the external unlock route");
+        recoveryDock.setRealtimeAvailable(false);
+        check(recovery && !recovery->isEnabled(), "failed native dock registration disables unavailable recovery entry");
+    }
     const QString fixture = app.arguments().size() > 1 ? app.arguments().at(1) : QDir::current().filePath(QStringLiteral("crop-fixture.png"));
     QDir().mkpath(QFileInfo(fixture).absolutePath());
     QImage image = quadrants(1600, 1000);

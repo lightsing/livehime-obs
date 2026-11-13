@@ -43,6 +43,7 @@ struct RoomInfo {
     int coverStatus = -99;
     QString areaName;
     QString parentAreaName;
+    QJsonObject rankInfo;
 };
 struct LiveSession { qint64 roomId = 0; QString server; QString key; };
 
@@ -66,6 +67,9 @@ Request start(qint64 roomId, int areaId, const QByteArray &csrf, qint64 timestam
 Request stop(qint64 roomId, const QByteArray &csrf, qint64 timestampSeconds);
 Request room(qint64 uid, qint64 timestampSeconds);
 Request preLive(qint64 timestampSeconds);
+Request danmuInfo(qint64 roomId, qint64 timestampSeconds);
+Request contributionRank(qint64 uid, qint64 roomId, const QString &type, const QString &sort, qint64 timestampSeconds);
+Request guardRank(qint64 uid, qint64 roomId, int typ, int page, qint64 timestampSeconds);
 Request cover(const QUrl &location, const QByteArray &csrf, const QByteArray &visitId);
 QByteArray userAgent();
 

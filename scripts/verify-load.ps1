@@ -10,6 +10,24 @@ if (![Environment]::Is64BitProcess) { throw 'Use 64-bit PowerShell.' }
 $PluginPath = [IO.Path]::GetFullPath($PluginPath)
 $obsBin = [IO.Path]::GetFullPath((Join-Path $ObsRoot 'bin\64bit'))
 if (!(Test-Path -LiteralPath $PluginPath)) { throw "Missing plugin: $PluginPath" }
+$projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$versionMatch = [regex]::Match((Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'CMakeLists.txt')), 'project\(livehime-obs\s+VERSION\s+(\d+\.\d+\.\d+)\s')
+if (!$versionMatch.Success) { throw 'Cannot read plugin version.' }
+# Optional import inspection complements the actual Windows loader check below.
+$dumpbin = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+$dumpbinPath = if ($dumpbin) { $dumpbin.Source } else {
+    $candidate = Get-ChildItem -Path "${env:ProgramFiles}\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+    if ($candidate) { $candidate.FullName } else { $null }
+}
+$codecImportsChecked = $false
+if ($dumpbinPath) {
+    $imports = & $dumpbinPath /dependents $PluginPath
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect plugin imports.' }
+    if (($imports -join "`n") -match '(?im)^\s*(?:zlib[^\s]*|brotli[^\s]*)\.dll\s*$') {
+        throw 'Unexpected dynamic decompressor dependency; codecs must be statically linked.'
+    }
+    $codecImportsChecked = $true
+}
 
 Add-Type -TypeDefinition @'
 using System;
@@ -27,8 +45,6 @@ public static class LivehimeLoaderProbe {
   public static extern bool FreeLibrary(IntPtr module);
   [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
   public delegate uint VersionFunction();
-  [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-  public delegate IntPtr TextFunction();
 }
 '@
 $cookie = [LivehimeLoaderProbe]::AddDllDirectory($obsBin)
@@ -39,19 +55,16 @@ try {
     # obs_module_load outside a running OBS host or start any network operation.
     $module = [LivehimeLoaderProbe]::LoadLibraryEx($PluginPath, [IntPtr]::Zero, 0x1100)
     if ($module -eq [IntPtr]::Zero) { throw "LoadLibraryEx failed: Win32 $([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
-    foreach ($export in @('obs_module_load', 'obs_module_unload', 'obs_module_ver', 'obs_module_name', 'obs_module_author')) {
+    foreach ($export in @('obs_module_load', 'obs_module_unload', 'obs_module_ver', 'obs_module_name')) {
         if ([LivehimeLoaderProbe]::GetProcAddress($module, $export) -eq [IntPtr]::Zero) { throw "Missing OBS module export: $export" }
     }
     $address = [LivehimeLoaderProbe]::GetProcAddress($module, 'obs_module_ver')
     $getVersion = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($address, [LivehimeLoaderProbe+VersionFunction])
     $version = $getVersion.Invoke()
     if ($version -ne 0x21000001) { throw ('Expected OBS API 33.0.1; plugin reports 0x{0:x8}' -f $version) }
-    $authorAddress = [LivehimeLoaderProbe]::GetProcAddress($module, 'obs_module_author')
-    $getAuthor = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($authorAddress, [LivehimeLoaderProbe+TextFunction])
-    $author = [Runtime.InteropServices.Marshal]::PtrToStringUTF8($getAuthor.Invoke())
     [pscustomobject]@{
-        plugin = $PluginPath; obsBin = $obsBin; loaded = $true
-        author = $author
+        plugin = $PluginPath; pluginVersion = $versionMatch.Groups[1].Value; obsBin = $obsBin; loaded = $true
+        staticCodecImportsChecked = $codecImportsChecked
         moduleApi = '33.0.1'; scope = 'DLL import resolution and module exports; no OBS module initialization'
     } | ConvertTo-Json
 } finally {

@@ -1,9 +1,9 @@
 #pragma once
 #include "live-controller.hpp"
-#include <QWidget>
-#include <QPointer>
 #include <QPixmap>
+#include <QPointer>
 #include <QTemporaryDir>
+#include <QWidget>
 
 class QLabel;
 class QLineEdit;
@@ -17,10 +17,16 @@ class CoverButton;
 class NativeStreamControls;
 class RoomDock final : public QWidget {
     Q_OBJECT
-public:
+  public:
     explicit RoomDock(const QString &storageDirectory, QWidget *parent = nullptr);
+    explicit RoomDock(LiveController *controller, QWidget *parent = nullptr);
     bool attachNativeControls(QWidget *mainWindow, QString *error);
-private:
+    void setRealtimeAvailable(bool available);
+  signals:
+    void openRealtimeWindow(int kind);
+    void unlockRealtimeInteraction();
+
+  private:
     void updateView();
     void updateNativeControls();
     bool canStart() const;
@@ -60,4 +66,4 @@ private:
     bool nativeControlsAttached_ = false;
     qint64 displayedRoom_ = 0;
 };
-}
+} // namespace livehime

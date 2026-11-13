@@ -1,4 +1,4 @@
-; Build using scripts/build-installer.ps1. PayloadRoot is the verified modern bundle.
+; Build using scripts/build-installer.ps1. The payload is a verified plugin ZIP.
 #ifndef PayloadRoot
   #error PayloadRoot must name the verified staging directory.
 #endif
@@ -8,9 +8,18 @@
 #ifndef AppVersion
   #error AppVersion must come from CMakeLists.txt.
 #endif
+#ifdef FixtureIdentity
+  #define ProductAppId "{{7F302FCE-7BA4-4ABE-92CF-62D0937D87AD}"
+  #define UninstallGuid "{7F302FCE-7BA4-4ABE-92CF-62D0937D87AD}"
+  #define ArtifactSuffix "-fixture"
+#else
+  #define ProductAppId "{{D39A69EF-8533-4CB2-8A13-770CBCA96340}"
+  #define UninstallGuid "{D39A69EF-8533-4CB2-8A13-770CBCA96340}"
+  #define ArtifactSuffix ""
+#endif
 
 [Setup]
-AppId={{D39A69EF-8533-4CB2-8A13-770CBCA96340}
+AppId={#ProductAppId}
 AppName=Livehime OBS
 AppVersion={#AppVersion}
 AppVerName=Livehime OBS {#AppVersion}
@@ -20,7 +29,7 @@ AppSupportURL=https://github.com/lightsing/livehime-obs/issues
 AppUpdatesURL=https://github.com/lightsing/livehime-obs/releases
 VersionInfoVersion={#AppVersion}.0
 VersionInfoDescription=Livehime OBS - Bilibili streaming plugin installer
-DefaultDirName={commonappdata}\obs-studio\plugins\livehime-obs
+DefaultDirName={code:DefaultInstallDirectory}
 AppendDefaultDirName=no
 DisableDirPage=no
 DisableWelcomePage=no
@@ -30,15 +39,16 @@ AllowRootDirectory=no
 AllowUNCPath=no
 PrivilegesRequired=admin
 ; Explicit /CURRENTUSER plus a non-shared /DIR supports isolated fixture tests.
-PrivilegesRequiredOverridesAllowed=commandline
+PrivilegesRequiredOverridesAllowed=dialog
 UsePreviousAppDir=yes
+UsePreviousPrivileges=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
 WizardStyle=modern
-LicenseFile={#PayloadRoot}\data\docs\LICENSE
+LicenseFile={#PayloadRoot}\data\obs-plugins\livehime-obs\docs\LICENSE
 OutputDir={#OutputRoot}
-OutputBaseFilename=livehime-obs-{#AppVersion}-windows-x64-setup
+OutputBaseFilename=livehime-obs-{#AppVersion}-windows-x64-setup{#ArtifactSuffix}
 Compression=lzma2/max
 SolidCompression=yes
 SetupLogging=yes
@@ -47,9 +57,9 @@ CloseApplications=no
 RestartApplications=no
 Uninstallable=yes
 UninstallLogMode=append
-UninstallFilesDir={app}\installer
+UninstallFilesDir={code:SelectedUninstallerRoot}
 UninstallDisplayName=Livehime OBS {#AppVersion}
-UninstallDisplayIcon={app}\installer\unins000.exe
+UninstallDisplayIcon={code:SelectedUninstallerRoot}\unins000.exe
 
 [Languages]
 Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
@@ -60,8 +70,8 @@ chinesesimp.SelectObs=选择 OBS Studio
 english.SelectObs=Select OBS Studio
 chinesesimp.SelectObsDescription=请选择已安装的 OBS Studio 33.0.1 目录。
 english.SelectObsDescription=Select the existing OBS Studio 33.0.1 directory.
-chinesesimp.SelectObsDetails=目录应包含 bin\64bit\obs64.exe。安装器仅用此目录核验 OBS 33.0.1 x64 和 Qt 6.11.1；插件将安装到下一页所示的独立插件目录。
-english.SelectObsDetails=The directory must contain bin\64bit\obs64.exe. Setup checks OBS 33.0.1 x64 and Qt 6.11.1 here; the plugin goes into the separate bundle directory shown on the next page.
+chinesesimp.SelectObsDetails=目录应包含 bin\64bit\obs64.exe。安装器在此核验 OBS 33.0.1 x64 和 Qt 6.11.1。升级会沿用原插件位置；新安装再选择独立插件目录。
+english.SelectObsDetails=The directory must contain bin\64bit\obs64.exe. Setup checks OBS 33.0.1 x64 and Qt 6.11.1 here. Upgrades keep their existing plugin location; a new installation selects its bundle directory next.
 chinesesimp.SelectBundle=选择插件目录（通常保留默认位置）
 english.SelectBundle=Select the plugin bundle directory (normally keep the default)
 chinesesimp.SelectBundleDetails=标准位置为 ProgramData\obs-studio\plugins\livehime-obs，所有用户共享。最后一级必须为 livehime-obs。便携版可使用其 OBS 目录下的 plugins\livehime-obs。
@@ -90,10 +100,8 @@ chinesesimp.TargetChanged=此插件已安装在 %1。升级时请保留原插件
 english.TargetChanged=This plugin is already installed in %1. Keep that bundle directory when upgrading, or uninstall it before moving the installation.
 chinesesimp.HostChanged=此插件记录的 OBS 目录为 %1。升级时请保留原 OBS 目录；若要迁移，请先卸载原安装。
 english.HostChanged=This installation is associated with OBS at %1. Keep that OBS directory when upgrading, or uninstall before changing it.
-chinesesimp.LegacyInstallExists=检测到旧布局的安装记录。请先使用原安装的卸载程序卸载，再安装新版独立插件目录。安装器不会自动迁移或删除旧文件。
-english.LegacyInstallExists=An installation using the old layout is registered. Uninstall it using its original uninstaller before installing the modern bundle. Setup will not migrate or delete old files automatically.
-chinesesimp.CurrentUserInstallExists=检测到旧的当前用户模式安装。请先使用原卸载程序卸载，再正常运行新版共享安装器。隔离测试目录的维护必须继续显式使用 /CURRENTUSER。
-english.CurrentUserInstallExists=A current-user installation is registered. Uninstall it with its original uninstaller before running the shared installer normally. Maintenance of an isolated test directory requires an explicit /CURRENTUSER.
+chinesesimp.CurrentUserInstallExists=此插件已按“当前用户”模式安装。请使用原安装范围升级（命令行可用 /CURRENTUSER）；仅在更改安装范围时才需先使用原卸载程序卸载。
+english.CurrentUserInstallExists=A current-user installation is registered. Upgrade in its existing mode (use /CURRENTUSER on the command line). Uninstall first only when changing the installation mode.
 chinesesimp.AllUsersInstallExists=已存在共享安装。请正常运行安装器，不要使用 /CURRENTUSER；若要迁移，请先使用原卸载程序卸载。
 english.AllUsersInstallExists=A shared installation already exists. Run Setup normally without /CURRENTUSER. To move it, first use the original installation's uninstaller.
 chinesesimp.InstallModesConflict=检测到两种模式的安装记录。请分别使用原卸载程序处理，再重新运行共享安装器。
@@ -104,25 +112,29 @@ chinesesimp.InstallStateMissing=无法读取本安装的 OBS 目录记录。请�
 english.InstallStateMissing=This installation's OBS directory record could not be read. Repair it by running Setup in the same bundle directory before uninstalling.
 
 [Files]
-Source: "{#PayloadRoot}\livehime-obs.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#PayloadRoot}\data\*"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs; AfterInstall: EnsureUnicodeInstallState
+Source: "{#PayloadRoot}\obs-plugins\64bit\livehime-obs.dll"; DestDir: "{code:SelectedBinaryRoot}"; Flags: ignoreversion
+Source: "{#PayloadRoot}\data\obs-plugins\livehime-obs\*"; DestDir: "{code:SelectedDataRoot}"; Excludes: "install-manifest.json"; Flags: ignoreversion recursesubdirs createallsubdirs; AfterInstall: EnsureUnicodeInstallState
+Source: "{#PayloadRoot}\manifest-modern.json"; DestDir: "{code:SelectedDataRoot}"; DestName: "install-manifest.json"; Flags: ignoreversion; Check: IsModernLayout
+Source: "{#PayloadRoot}\data\obs-plugins\livehime-obs\install-manifest.json"; DestDir: "{code:SelectedDataRoot}"; Flags: ignoreversion; Check: IsLegacyLayout
 
 [INI]
-Filename: "{app}\data\install-state.ini"; Section: "Install"; Key: "ObsRoot"; String: "{code:SelectedObsRoot}"
-Filename: "{app}\data\install-state.ini"; Section: "Install"; Key: "SharedBundle"; String: "{code:SelectedSharedBundle}"
-Filename: "{app}\data\install-state.ini"; Section: "Install"; Key: "Layout"; String: "modern-bundle-v1"
+Filename: "{code:SelectedDataRoot}\install-state.ini"; Section: "Install"; Key: "ObsRoot"; String: "{code:SelectedObsRoot}"
+Filename: "{code:SelectedDataRoot}\install-state.ini"; Section: "Install"; Key: "SharedBundle"; String: "{code:SelectedSharedBundle}"
+Filename: "{code:SelectedDataRoot}\install-state.ini"; Section: "Install"; Key: "Layout"; String: "{code:SelectedLayoutName}"
 
 [UninstallDelete]
 ; This exact file is generated and owned by Setup. No directory deletes.
-Type: files; Name: "{app}\data\install-state.ini"
+Type: files; Name: "{code:SelectedDataRoot}\install-state.ini"
 
 [Code]
 const
-  PluginUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{D39A69EF-8533-4CB2-8A13-770CBCA96340}_is1';
-  InstallLayout = 'modern-bundle-v1';
+  PluginUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#UninstallGuid}_is1';
+  ModernInstallLayout = 'modern-bundle-v1';
+  LegacyInstallLayout = 'legacy-root-v1';
 
 var
   ObsDirectoryPage: TInputDirWizardPage;
+  InstallationLayout, RegisteredRoot, RegisteredHost: String;
 
 function GetBinaryTypeW(FileName: String; var BinaryType: Cardinal): Boolean;
   external 'GetBinaryTypeW@kernel32.dll stdcall';
@@ -139,6 +151,100 @@ function CloseHandle(Handle: NativeInt): Boolean;
 function NormalizedPath(const Value: String): String;
 begin
   Result := Lowercase(RemoveBackslashUnlessRoot(ExpandFileName(Value)));
+end;
+
+function RegisteredInstallRoot(): String;
+var
+  RootKey: Integer;
+begin
+  if IsAdminInstallMode then RootKey := HKLM64 else RootKey := HKCU;
+  if not RegQueryStringValue(RootKey, PluginUninstallKey, 'Inno Setup: App Path', Result) then
+    if not RegQueryStringValue(RootKey, PluginUninstallKey, 'InstallLocation', Result) then Result := '';
+end;
+
+function ConfigureExistingInstallation(): String;
+var
+  PreviousLayout, PreviousBundle, StatePath, StateHost: String;
+  Registered: Boolean;
+begin
+  Result := '';
+  RegisteredRoot := RegisteredInstallRoot();
+  RegisteredHost := GetPreviousData('ObsRoot', '');
+  InstallationLayout := ModernInstallLayout;
+  if IsAdminInstallMode then Registered := RegKeyExists(HKLM64, PluginUninstallKey)
+  else Registered := RegKeyExists(HKCU, PluginUninstallKey);
+  if not Registered then Exit;
+  if RegisteredRoot = '' then begin Result := CustomMessage('InstallStateMissing'); Exit; end;
+  PreviousLayout := GetPreviousData('InstallLayout', '');
+  PreviousBundle := GetPreviousData('BundleRoot', '');
+  if PreviousLayout = ModernInstallLayout then begin
+    if (RegisteredHost = '') or (PreviousBundle = '') or
+      (NormalizedPath(PreviousBundle) <> NormalizedPath(RegisteredRoot)) then
+      Result := CustomMessage('InstallStateMissing');
+    StatePath := AddBackslash(RegisteredRoot) + 'data\install-state.ini';
+    if FileExists(StatePath) then begin
+      StateHost := GetIniString('Install', 'ObsRoot', '', StatePath);
+      if (GetIniString('Install', 'Layout', '', StatePath) <> ModernInstallLayout) or
+        (StateHost = '') or (NormalizedPath(StateHost) <> NormalizedPath(RegisteredHost)) then
+        Result := CustomMessage('InstallStateMissing');
+    end;
+  end else if ((PreviousLayout = '') or (PreviousLayout = LegacyInstallLayout)) and
+    (RegisteredHost <> '') and
+    (NormalizedPath(RegisteredHost) = NormalizedPath(RegisteredRoot)) and
+    FileExists(AddBackslash(RegisteredRoot) + 'bin\64bit\obs64.exe') then
+    InstallationLayout := LegacyInstallLayout
+  else Result := CustomMessage('InstallStateMissing');
+end;
+
+function EffectiveLayout(): String;
+begin
+  Result := InstallationLayout;
+  if Result <> '' then Exit;
+  if IsUninstaller then begin
+    Result := GetIniString('Install', 'Layout', '', ExpandConstant('{app}\data\install-state.ini'));
+    if Result <> ModernInstallLayout then
+      Result := GetIniString('Install', 'Layout', '',
+        ExpandConstant('{app}\data\obs-plugins\livehime-obs\install-state.ini'));
+  end;
+end;
+
+function IsModernLayout(): Boolean;
+begin
+  Result := EffectiveLayout() = ModernInstallLayout;
+end;
+
+function IsLegacyLayout(): Boolean;
+begin
+  Result := EffectiveLayout() = LegacyInstallLayout;
+end;
+
+function SelectedLayoutName(Param: String): String;
+begin
+  Result := EffectiveLayout();
+end;
+
+function SelectedBinaryRoot(Param: String): String;
+begin
+  Result := ExpandConstant('{app}');
+  if IsLegacyLayout() then Result := AddBackslash(Result) + 'obs-plugins\64bit';
+end;
+
+function SelectedDataRoot(Param: String): String;
+begin
+  Result := ExpandConstant('{app}\data');
+  if IsLegacyLayout() then Result := AddBackslash(Result) + 'obs-plugins\livehime-obs';
+end;
+
+function SelectedUninstallerRoot(Param: String): String;
+begin
+  if IsLegacyLayout() then Result := AddBackslash(SelectedDataRoot('')) + 'installer'
+  else Result := ExpandConstant('{app}\installer');
+end;
+
+function DefaultInstallDirectory(Param: String): String;
+begin
+  Result := RegisteredInstallRoot();
+  if Result = '' then Result := ExpandConstant('{commonappdata}\obs-studio\plugins\livehime-obs');
 end;
 
 function PathWithin(const Path, Parent: String): Boolean;
@@ -162,7 +268,7 @@ end;
 
 function SelectedSharedBundle(Param: String): String;
 begin
-  if SharedBundle(ExpandConstant('{app}')) then Result := '1' else Result := '0';
+  if IsModernLayout() and SharedBundle(ExpandConstant('{app}')) then Result := '1' else Result := '0';
 end;
 
 procedure EnsureUnicodeInstallState();
@@ -172,7 +278,7 @@ var
   Written: Cardinal;
   Success: Boolean;
 begin
-  StatePath := ExpandConstant('{app}\data\install-state.ini');
+  StatePath := AddBackslash(SelectedDataRoot('')) + 'install-state.ini';
   if FileExists(StatePath) then Exit;
   { Win32 INI APIs preserve Unicode only when an existing file has a UTF-16 BOM. }
   Handle := CreateFileW(StatePath, $40000000, 0, 0, 1, $80, 0);
@@ -195,17 +301,6 @@ begin
   if UserInstalled and MachineInstalled then Result := CustomMessage('InstallModesConflict')
   else if IsAdminInstallMode and UserInstalled then Result := CustomMessage('CurrentUserInstallExists')
   else if (not IsAdminInstallMode) and MachineInstalled then Result := CustomMessage('AllUsersInstallExists');
-end;
-
-function ExistingLayoutError(): String;
-var
-  Registered: Boolean;
-begin
-  if IsAdminInstallMode then Registered := RegKeyExists(HKLM64, PluginUninstallKey)
-  else Registered := RegKeyExists(HKCU, PluginUninstallKey);
-  Result := '';
-  if Registered and (GetPreviousData('InstallLayout', '') <> InstallLayout) then
-    Result := CustomMessage('LegacyInstallExists');
 end;
 
 function DefaultObsRoot(): String;
@@ -320,10 +415,17 @@ var
 begin
   Result := '';
   Candidate := AddBackslash(ObsRoot) + 'obs-plugins\64bit\livehime-obs.dll';
-  if not FileExists(Candidate) then Candidate := AddBackslash(BundleRoot) + 'bin\64bit\livehime-obs.dll';
-  if FileExists(Candidate) then begin
+  if FileExists(Candidate) and not (IsLegacyLayout() and
+    (NormalizedPath(ObsRoot) = NormalizedPath(BundleRoot))) then begin
     Result := FmtMessage(CustomMessage('DuplicatePlugin'), [Candidate]);
     Exit;
+  end;
+  if IsModernLayout() then begin
+    Candidate := AddBackslash(BundleRoot) + 'bin\64bit\livehime-obs.dll';
+    if FileExists(Candidate) then begin
+      Result := FmtMessage(CustomMessage('DuplicatePlugin'), [Candidate]);
+      Exit;
+    end;
   end;
   if IsPortableRoot(ObsRoot) then ActiveBundle := AddBackslash(ObsRoot) + 'plugins\livehime-obs'
   else ActiveBundle := ExpandConstant('{commonappdata}\obs-studio\plugins\livehime-obs');
@@ -336,7 +438,7 @@ begin
   if (UserPath <> '') and (GetEnv('OBS_LEGACY_PLUGINS_DATA_PATH') <> '') then begin
     Candidate := AddBackslash(UserPath) + 'livehime-obs.dll';
     if FileExists(Candidate) and (NormalizedPath(Candidate) <>
-      NormalizedPath(AddBackslash(BundleRoot) + 'livehime-obs.dll')) then
+      NormalizedPath(AddBackslash(SelectedBinaryRoot('')) + 'livehime-obs.dll')) then
       Result := FmtMessage(CustomMessage('DuplicatePlugin'), [Candidate]);
   end;
 end;
@@ -344,6 +446,7 @@ end;
 function BundleLocationError(const BundleRoot: String): String;
 begin
   Result := '';
+  if IsLegacyLayout() then Exit;
   if Lowercase(ExtractFileName(RemoveBackslashUnlessRoot(BundleRoot))) <> 'livehime-obs' then begin
     Result := CustomMessage('WrongBundleName');
     Exit;
@@ -382,12 +485,12 @@ end;
 
 function BundleWriteError(const BundleRoot: String): String;
 begin
-  Result := ProbeExistingParent(BundleRoot);
-  if Result = '' then Result := ProbeExistingParent(AddBackslash(BundleRoot) + 'data');
-  if Result = '' then Result := ProbeExistingParent(AddBackslash(BundleRoot) + 'data\locale');
-  if Result = '' then Result := ProbeExistingParent(AddBackslash(BundleRoot) + 'data\qt-plugins\tls');
-  if Result = '' then Result := ProbeExistingParent(AddBackslash(BundleRoot) + 'data\docs\deps');
-  if Result = '' then Result := ProbeExistingParent(AddBackslash(BundleRoot) + 'installer');
+  Result := ProbeExistingParent(SelectedBinaryRoot(''));
+  if Result = '' then Result := ProbeExistingParent(SelectedDataRoot(''));
+  if Result = '' then Result := ProbeExistingParent(AddBackslash(SelectedDataRoot('')) + 'locale');
+  if Result = '' then Result := ProbeExistingParent(AddBackslash(SelectedDataRoot('')) + 'qt-plugins\tls');
+  if Result = '' then Result := ProbeExistingParent(AddBackslash(SelectedDataRoot('')) + 'docs\deps');
+  if Result = '' then Result := ProbeExistingParent(SelectedUninstallerRoot(''));
 end;
 
 function TargetError(const ObsRoot, BundleRoot: String): String;
@@ -395,9 +498,8 @@ var
   PreviousRoot: String;
 begin
   Result := InstallModeError();
-  if Result = '' then Result := ExistingLayoutError();
   if Result <> '' then Exit;
-  PreviousRoot := GetPreviousData('BundleRoot', '');
+  PreviousRoot := RegisteredRoot;
   if (PreviousRoot <> '') and (NormalizedPath(PreviousRoot) <> NormalizedPath(BundleRoot)) then begin
     Result := FmtMessage(CustomMessage('TargetChanged'), [PreviousRoot]);
     Exit;
@@ -405,6 +507,10 @@ begin
   PreviousRoot := GetPreviousData('ObsRoot', '');
   if (PreviousRoot <> '') and (NormalizedPath(PreviousRoot) <> NormalizedPath(ObsRoot)) then begin
     Result := FmtMessage(CustomMessage('HostChanged'), [PreviousRoot]);
+    Exit;
+  end;
+  if IsLegacyLayout() and (NormalizedPath(ObsRoot) <> NormalizedPath(BundleRoot)) then begin
+    Result := FmtMessage(CustomMessage('TargetChanged'), [RegisteredRoot]);
     Exit;
   end;
   Result := HostCompatibilityError(ObsRoot);
@@ -418,7 +524,7 @@ var
   Error: String;
 begin
   Error := InstallModeError();
-  if Error = '' then Error := ExistingLayoutError();
+  if Error = '' then Error := ConfigureExistingInstallation();
   Result := Error = '';
   if not Result then begin
     Log(Error);
@@ -434,6 +540,17 @@ begin
   ObsDirectoryPage.Values[0] := DefaultObsRoot();
   WizardForm.SelectDirLabel.Caption := CustomMessage('SelectBundle');
   WizardForm.SelectDirBrowseLabel.Caption := CustomMessage('SelectBundleDetails');
+  if IsLegacyLayout() then begin
+    WizardForm.SelectDirLabel.Caption := CustomMessage('SelectObs');
+    WizardForm.SelectDirBrowseLabel.Caption := CustomMessage('SelectObsDescription');
+  end;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  { An upgrade keeps its physical installation directory. The separate OBS
+    page remains visible so the host and plugin directory cannot be confused. }
+  Result := (RegisteredRoot <> '') and (PageID = wpSelectDir);
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -459,8 +576,10 @@ end;
 
 procedure RegisterPreviousData(PreviousDataKey: Integer);
 begin
-  SetPreviousData(PreviousDataKey, 'InstallLayout', InstallLayout);
-  SetPreviousData(PreviousDataKey, 'BundleRoot', ExpandConstant('{app}'));
+  SetPreviousData(PreviousDataKey, 'InstallLayout', EffectiveLayout());
+  SetPreviousData(PreviousDataKey, 'InstallRoot', ExpandConstant('{app}'));
+  if IsModernLayout() then SetPreviousData(PreviousDataKey, 'BundleRoot', ExpandConstant('{app}'))
+  else SetPreviousData(PreviousDataKey, 'BundleRoot', '');
   SetPreviousData(PreviousDataKey, 'ObsRoot', SelectedObsRoot(''));
 end;
 
@@ -468,9 +587,10 @@ function InitializeUninstall(): Boolean;
 var
   Error, ObsRoot, StatePath: String;
 begin
-  StatePath := ExpandConstant('{app}\data\install-state.ini');
+  StatePath := AddBackslash(SelectedDataRoot('')) + 'install-state.ini';
   ObsRoot := GetIniString('Install', 'ObsRoot', '', StatePath);
-  if (ObsRoot = '') or (GetIniString('Install', 'Layout', '', StatePath) <> InstallLayout) then
+  if (ObsRoot = '') or ((EffectiveLayout() <> ModernInstallLayout) and
+    (EffectiveLayout() <> LegacyInstallLayout)) then
     Error := CustomMessage('InstallStateMissing')
   else Error := RunningHostError(ObsRoot, ExpandConstant('{app}'),
     GetIniBool('Install', 'SharedBundle', False, StatePath));

@@ -163,18 +163,18 @@ std::optional<ApiError> BiliClient::sessionError() const
     return {};
 }
 
-void BiliClient::send(const protocol::Request &draft, Callback<QJsonObject> callback,
+QNetworkReply *BiliClient::send(const protocol::Request &draft, Callback<QJsonObject> callback,
                       QHttpMultiPart *multipart, bool web)
 {
     if (!protocol::isApiUrl(draft.url) || (draft.method != "GET" && draft.method != "POST")) {
         delete multipart;
         callback(inputError(QStringLiteral("请求目标不在允许的 HTTPS API 范围内。")));
-        return;
+        return nullptr;
     }
     if (!QSslSocket::supportsSsl()) {
         delete multipart;
         callback(protocol::transportFailure(QNetworkReply::NoError, 0, false, false, false));
-        return; // No request was sent, so a mutation cannot have committed.
+        return nullptr; // No request was sent, so a mutation cannot have committed.
     }
     QNetworkRequest request(draft.url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
@@ -243,7 +243,7 @@ void BiliClient::send(const protocol::Request &draft, Callback<QJsonObject> call
         if (auto *error = std::get_if<ApiError>(&result)) {
             error->httpStatus = status;
             if (error->kind == ApiError::Kind::InvalidResponse) error->outcomeUnknown = mutation;
-            if (error->kind == ApiError::Kind::Authentication) validated_ = false;
+            if (error->kind == ApiError::Kind::Authentication) { validated_ = false; emit authenticationExpired(); }
         }
         // Store only this plugin's jar. There are no diagnostic payload/URL logs.
         const QPointer<BiliClient> self(this);
@@ -251,8 +251,24 @@ void BiliClient::send(const protocol::Request &draft, Callback<QJsonObject> call
         if (!self || generation != generation_) return;
         callback(std::move(result));
     });
+    return reply;
 }
 
+QNetworkReply *BiliClient::fetchRealtime(const protocol::Request &request, Callback<QJsonObject> callback)
+{
+    if (const auto error = sessionError()) { callback(*error); return nullptr; }
+    const auto path = request.url.path();
+    if (request.method != "GET" || !(path == "/xlive/app-room/v1/index/getDanmuInfo" ||
+        path == "/xlive/general-interface/v1/rank/queryContributionRank" ||
+        path == "/xlive/app-room/v2/guardTab/topListNew")) {
+        callback(inputError(QStringLiteral("不支持的实时只读请求。"))); return nullptr;
+    }
+    return send(request, std::move(callback));
+}
+void BiliClient::cancelRealtime(QNetworkReply *reply)
+{
+    if (reply && pending_.contains(reply)) reply->abort();
+}
 void BiliClient::validateSession(Callback<UserInfo> callback)
 {
     validated_ = false;

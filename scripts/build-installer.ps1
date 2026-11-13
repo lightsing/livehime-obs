@@ -5,6 +5,7 @@ param(
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\dist'),
     [string]$ToolsRoot = (Join-Path $PSScriptRoot '..\.tools'),
     [switch]$Offline,
+    [switch]$FixtureIdentity,
     [switch]$KeepStage
 )
 $ErrorActionPreference = 'Stop'
@@ -25,14 +26,12 @@ $compiler = & (Join-Path $PSScriptRoot 'bootstrap-installer.ps1') -ToolsRoot $To
 $buildRoot = Join-Path $projectRoot 'build'
 $stage = Join-Path $buildRoot ('installer-stage-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $stage, $OutputDirectory | Out-Null
-# Keep the manual ZIP compatible with the original OBS-root layout. The setup
-# program remaps the same verified bytes into OBS's independent plugin bundle.
-$runtimeMapping = [ordered]@{
-    'obs-plugins/64bit/livehime-obs.dll' = 'livehime-obs.dll'
-    'data/obs-plugins/livehime-obs/locale/en-US.ini' = 'data/locale/en-US.ini'
-    'data/obs-plugins/livehime-obs/locale/zh-CN.ini' = 'data/locale/zh-CN.ini'
-    'data/obs-plugins/livehime-obs/qt-plugins/tls/qschannelbackend.dll' = 'data/qt-plugins/tls/qschannelbackend.dll'
-}
+$runtimeFiles = @(
+    'obs-plugins/64bit/livehime-obs.dll',
+    'data/obs-plugins/livehime-obs/locale/en-US.ini',
+    'data/obs-plugins/livehime-obs/locale/zh-CN.ini',
+    'data/obs-plugins/livehime-obs/qt-plugins/tls/qschannelbackend.dll'
+)
 $archive = $null
 try {
     $archive = [IO.Compression.ZipFile]::OpenRead($PackagePath)
@@ -59,41 +58,62 @@ try {
         $verified[$record.path] = $true
     }
     if ($verified.Count -ne $entries.Count - 1) { throw 'ZIP contains files not covered by its hash manifest.' }
-    foreach ($relative in $runtimeMapping.Keys) {
+    foreach ($relative in $runtimeFiles) {
         if (!$verified.ContainsKey($relative)) { throw "Missing verified runtime file: $relative" }
-        $destination = Join-Path $stage $runtimeMapping[$relative]
+        $destination = Join-Path $stage $relative
         New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($destination)) | Out-Null
         [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[$relative], $destination)
     }
     $archive.Dispose()
     $archive = $null
-    $pluginData = Join-Path $stage 'data'
+    $pluginData = Join-Path $stage 'data\obs-plugins\livehime-obs'
     $docs = Join-Path $pluginData 'docs'
     New-Item -ItemType Directory -Path $docs | Out-Null
     foreach ($name in @('README.md', 'AUTHORS.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'VALIDATION.md')) {
         Copy-Item -LiteralPath (Join-Path $projectRoot $name) -Destination $docs
     }
     Copy-Item -LiteralPath (Join-Path $projectRoot 'deps') -Destination (Join-Path $docs 'deps') -Recurse
+    $evidence = Join-Path $docs 'validation'
+    New-Item -ItemType Directory -Path $evidence | Out-Null
+    foreach ($name in @('ctest-0.2.0.txt', 'realtime-qt-probe.json', 'load-0.2.0.json', 'loader-final-0.2.0.json', 'isolated-host-0.2.0.txt', 'installer-0.2.0.json', 'obs-exit-repeat-0.2.0.json', 'loader-0.2.1.json', 'installer-upgrade-0.2.1.json', 'installer-fresh-0.2.1.json', 'ctest-0.2.2.txt', 'loader-0.2.2.json', 'native-ui-0.2.2.json', 'installer-upgrade-0.2.2.json', 'obs-docks-0.2.2.json')) {
+        $source = Join-Path $projectRoot "validation\$name"
+        if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $evidence }
+    }
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'validation\realtime-ui') -Destination $evidence -Recurse
     $files = @(Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName | ForEach-Object {
         [ordered]@{
             path = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/')
             sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         }
     })
-    [ordered]@{schema=2; layout='obs-modern-bundle'; version=$version; obsVersion='33.0.1'; qtVersion='6.11.1'; files=$files} |
+    [ordered]@{schema=1; version=$version; obsVersion='33.0.1'; qtVersion='6.11.1'; files=$files} |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $pluginData 'install-manifest.json') -Encoding utf8
-    & $compiler "/DPayloadRoot=$stage" "/DOutputRoot=$OutputDirectory" "/DAppVersion=$version" (Join-Path $projectRoot 'installer\livehime-obs.iss')
+    $modernFiles = @($files | ForEach-Object {
+        if ($_.path -eq 'obs-plugins/64bit/livehime-obs.dll') { $mapped = 'livehime-obs.dll' }
+        elseif ($_.path.StartsWith('data/obs-plugins/livehime-obs/', [StringComparison]::Ordinal)) {
+            $mapped = 'data/' + $_.path.Substring('data/obs-plugins/livehime-obs/'.Length)
+        } else { throw "Unexpected source path for modern layout: $($_.path)" }
+        [ordered]@{path=$mapped; sha256=$_.sha256}
+    })
+    [ordered]@{schema=2; layout='obs-modern-bundle'; version=$version; obsVersion='33.0.1'; qtVersion='6.11.1'; files=$modernFiles} |
+        ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $stage 'manifest-modern.json') -Encoding utf8
+    $compilerArgs = @("/DPayloadRoot=$stage", "/DOutputRoot=$OutputDirectory", "/DAppVersion=$version")
+    if ($FixtureIdentity) { $compilerArgs += '/DFixtureIdentity=1' }
+    $compilerArgs += (Join-Path $projectRoot 'installer\livehime-obs.iss')
+    & $compiler @compilerArgs
     if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
-    $installer = Join-Path $OutputDirectory "livehime-obs-$version-windows-x64-setup.exe"
+    $suffix = if ($FixtureIdentity) { '-fixture' } else { '' }
+    $installer = Join-Path $OutputDirectory "livehime-obs-$version-windows-x64-setup$suffix.exe"
     if (!(Test-Path -LiteralPath $installer)) { throw 'Inno Setup did not produce the expected installer.' }
     $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
     Set-Content -LiteralPath ($installer + '.sha256') -Value "$installerHash  $([IO.Path]::GetFileName($installer))" -Encoding ascii
     [ordered]@{
-        schema=2; layout='obs-modern-bundle'; version=$version; installer=[IO.Path]::GetFileName($installer); sha256=$installerHash
+        schema=1; version=$version; installer=[IO.Path]::GetFileName($installer); sha256=$installerHash
         payloadZip=[IO.Path]::GetFileName($PackagePath)
         payloadZipSha256=(Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash.ToLowerInvariant()
-        pluginSha256=($files | Where-Object path -eq 'livehime-obs.dll').sha256
-        toolchainVersion='7.1.1'; signed=$false
+        pluginSha256=($files | Where-Object path -eq $runtimeFiles[0]).sha256
+        toolchainVersion='7.1.1'; signed=$false; fixtureIdentity=[bool]$FixtureIdentity
+        defaultLayout='modern-bundle-v1'; supportedUpgradeLayouts=@('modern-bundle-v1','legacy-root-v1')
     } | ConvertTo-Json | Set-Content -LiteralPath ($installer + '.json') -Encoding utf8
     Write-Host "Installer: $installer"
     Write-Host "SHA256: $installerHash"

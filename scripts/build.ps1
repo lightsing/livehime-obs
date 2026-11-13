@@ -18,6 +18,7 @@ $BuildDirectory = [IO.Path]::GetFullPath($BuildDirectory)
 $DependenciesRoot = [IO.Path]::GetFullPath($DependenciesRoot)
 if (!$SkipBootstrap) {
     & (Join-Path $PSScriptRoot 'bootstrap-deps.ps1') -DependenciesRoot $DependenciesRoot -ObsRoot $ObsRoot -Offline:$Offline
+    & (Join-Path $PSScriptRoot 'bootstrap-goim-codecs.ps1') -DependenciesRoot (Join-Path $DependenciesRoot 'goim') -Offline:$Offline
 }
 $configureArgs = @('-S', $projectRoot, '-B', $BuildDirectory, '-G', $Generator, '-A', 'x64',
     "-DLIVEHIME_DEPS_ROOT=$DependenciesRoot", "-DOBS_ROOT=$ObsRoot", '-DBUILD_TESTING=ON')

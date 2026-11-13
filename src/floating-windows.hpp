@@ -1,0 +1,58 @@
+#pragma once
+#include <QAbstractListModel>
+#include <QJsonObject>
+#include <QWidget>
+#include <array>
+#include <memory>
+
+class QDockWidget;
+
+namespace livehime {
+class RoomRealtime;
+class DisplayAssetCache;
+// Plain-text presentation records: no HTML interpretation or remote resource fetching.
+class DisplayListModel final : public QAbstractListModel {
+  public:
+    explicit DisplayListModel(int limit, QObject *parent = nullptr);
+    int rowCount(const QModelIndex &parent = {}) const override;
+    QVariant data(const QModelIndex &, int role = Qt::DisplayRole) const override;
+    void append(const QString &text, const QString &avatar = {});
+    void setAssets(DisplayAssetCache *cache);
+    void setAvatarsVisible(bool visible);
+    void replace(const QStringList &rows);
+    void clear();
+
+  private:
+    int limit_;
+    QStringList rows_, avatars_;
+    DisplayAssetCache *assets_ = nullptr;
+    bool showAvatars_ = true;
+};
+struct RankChoice {
+    QString type, title;
+    QJsonObject config;
+    QList<QJsonObject> switches;
+    bool enabled = true, preferred = false;
+};
+QList<RankChoice> audienceChoices(const QJsonObject &rankInfo);
+QString privateDisplayName(const QJsonObject &row);
+class FloatingWindows final : public QObject {
+  public:
+    FloatingWindows(RoomRealtime *, QString storageDirectory, QWidget *parent = nullptr,
+                    std::array<QDockWidget *, 3> registeredDocks = {});
+    ~FloatingWindows() override;
+    void showWindow(int kind);
+    void unlockInteraction();
+    void dockWindow(int kind);
+    void floatWindow(int kind);
+    QDockWidget *dockWidget(int kind) const;
+    QWidget *panelWidget(int kind) const;
+    bool interactionLocked() const;
+    static const char *dockId(int kind);
+    void shutdown();
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> d;
+};
+} // namespace livehime

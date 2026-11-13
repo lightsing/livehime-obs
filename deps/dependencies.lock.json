@@ -12,9 +12,7 @@
       "sourceArtifact": "qt",
       "path": "qt6-2026-10-23/plugins/tls/qschannelbackend.dll",
       "sha256": "0d1a73019c732551f3b1fca1391435fc1f7e551e50cd22d2b273d0495e7ff3dd",
-      "qtSourceVersion": "6.11.1",
-      "qtSourceArchiveSha256": "3529cc37297a5a7aae4486843b9fd41c30df1d79a770f85e240b537dcc327ca5",
-      "obsDepsSourceCommit": "cbf0a3d8a0a34c07e822bda22a5f8214f91801d7"
+      "qtSourceCommit": "cbf0a3d8a0a34c07e822bda22a5f8214f91801d7"
     }
   ],
   "artifacts": [

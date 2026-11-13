@@ -12,7 +12,7 @@ file associations, PATH changes, an uninstall entry, or a restart.
 .EXAMPLE
 $iscc = & .\scripts\bootstrap-installer.ps1
 .EXAMPLE
-$iscc = & .\scripts\bootstrap-installer.ps1 -ToolsRoot .\.tools -Offline
+$iscc = & .\scripts\bootstrap-installer.ps1 -ToolsRoot D:\REA\tools -Offline
 #>
 [CmdletBinding()]
 param(

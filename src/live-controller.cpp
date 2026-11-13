@@ -18,6 +18,12 @@ LiveController::LiveController(QString storageDirectory, QObject *parent)
     });
     connect(bridge_, &ObsBridge::availabilityChanged, this, &LiveController::changed);
     connect(client_, &BiliClient::cookiesChanged, this, &LiveController::persistCookies);
+    connect(client_, &BiliClient::authenticationExpired, this, [this] {
+        if (!authenticated_) return;
+        authenticated_ = false; ++accountEpoch_;
+        status_ = QStringLiteral("B站登录已失效，请重新登录；OBS 输出状态未更改。");
+        emit changed();
+    });
     connect(bridge_, &ObsBridge::started, this, [this] {
         if (remoteRoomId_ && state_ != State::Stopping) setState(State::Live, QStringLiteral("直播中 · OBS 正在直接推流。"));
     });
@@ -62,6 +68,7 @@ void LiveController::initialize()
 void LiveController::acceptCookies(const QList<QNetworkCookie> &cookies)
 {
     if (working_ || (remoteRoomId_ && authenticated_)) return;
+    ++accountEpoch_;
     cancelMetadata(true);
     ++areasRequest_; ++coverRequest_;
     areasLoading_ = false; coverLoading_ = false;
@@ -96,6 +103,7 @@ void LiveController::validate()
 void LiveController::logout()
 {
     if (working_ || remoteRoomId_ || bridge_->busy()) return;
+    ++accountEpoch_;
     ++operation_;
     cancelMetadata(true);
     authenticated_ = false;
@@ -155,6 +163,7 @@ void LiveController::loadRoom(std::function<void()> continuation)
             return;
         }
         room_ = std::get<RoomInfo>(result);
+        roomAccountEpoch_ = accountEpoch_;
         working_ = false;
         metadataRefreshing_ = false;
         // A read begun before a draft edit or an accepted write cannot roll the

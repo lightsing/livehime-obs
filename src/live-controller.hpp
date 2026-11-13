@@ -54,6 +54,9 @@ public:
     QString coverError() const { return coverError_; }
     QString browserDataDirectory() const { return store_.browserDataDirectory(); }
     QString deviceId() const { return deviceId_; }
+    BiliClient *client() const { return client_; }
+    quint64 accountEpoch() const { return accountEpoch_; }
+    bool roomMatchesAccount() const { return roomAccountEpoch_ == accountEpoch_; }
 
 signals:
     void changed();
@@ -92,6 +95,8 @@ private:
     bool authenticated_ = false;
     bool stoppingRequest_ = false;
     quint64 operation_ = 0;
+    quint64 accountEpoch_ = 0;
+    quint64 roomAccountEpoch_ = ~quint64(0);
     QTimer titleDebounce_;
     QString titleDraft_;
     QString confirmedTitle_;
