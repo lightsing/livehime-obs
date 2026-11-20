@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Livehime OBS · 哔哩哔哩直播姬的 OBS 原生移植替代</title>
+  <meta name="description" content="哔哩哔哩直播姬的 OBS Studio 原生移植替代插件。无需双开直播姬，也不用复制推流码：在 OBS 内扫码登录、改标题分区裁封面、看弹幕礼物榜单、接超管提醒，点 OBS 原生按钮直接开停播。">
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav-inner">
+      <a class="brand" href="#top">
+        <img class="brand-icon" src="assets/favicon.svg" alt="Livehime OBS">
+        <span>Livehime OBS</span>
+        <span class="brand-version">v0.2.4</span>
+      </a>
+      <nav class="nav-links" id="navLinks">
+        <a href="#why">为什么用它</a>
+        <a href="#features">能做什么</a>
+        <a href="#screenshots">界面截图</a>
+        <a href="#start">快速上手</a>
+        <a href="tech.html">技术与构建</a>
+      </nav>
+      <div class="nav-actions">
+        <a class="btn btn-ghost" href="https://github.com/lightsing/livehime-obs" target="_blank" rel="noopener">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/tag/v0.2.4" target="_blank" rel="noopener">下载 v0.2.4</a>
+        <button class="nav-toggle" id="navToggle" type="button" aria-label="展开导航">菜单</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="container hero-grid">
+        <div>
+          <div class="eyebrow">
+            <span class="eyebrow-dot"></span>
+            <span>哔哩哔哩直播姬 · OBS 原生替代插件（Windows）</span>
+          </div>
+          <h1>告别双开与抓推流码，<br><span class="gradient-text">一个 OBS 直接开播 B 站</span></h1>
+          <p class="hero-lead">
+            <strong>Livehime OBS</strong> 把哔哩哔哩直播姬的核心功能直接搬进了 <strong>OBS Studio</strong>。
+            不需要再同时开着直播姬，也不用每次手动复制粘贴推流码——点 OBS「控件」里的原生按钮就能联动两端开停播，断线可重连同一场，下播成功后自动恢复你原来的 OBS 推流设置。
+          </p>
+          <div class="hero-cta">
+            <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/download/v0.2.4/livehime-obs-0.2.4-windows-x64-setup.exe" target="_blank" rel="noopener">
+              下载安装包 (v0.2.4)
+            </a>
+            <a class="btn btn-secondary" href="#screenshots">看界面截图</a>
+            <a class="btn btn-secondary" href="#start">三步上手教程</a>
+          </div>
+          <div class="hero-specs">
+            <div class="spec-item">
+              <span class="spec-label">开播操作</span>
+              <span class="spec-val">点 OBS 原生按钮直接播</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-label">适用环境</span>
+              <span class="spec-val">Windows x64 · OBS 33.0.1</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-label">账号安全</span>
+              <span class="spec-val">本机用户加密 · 密钥不落盘</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-visual">
+          <div class="window-frame">
+            <div class="window-bar">
+              <div class="window-dots"><span></span><span></span><span></span></div>
+              <span>OBS Studio 内的「B站直播」与弹幕/榜单停靠面板</span>
+              <span>Win x64</span>
+            </div>
+            <img src="assets/screenshots/obs-docking.png" alt="Livehime OBS 在 OBS Studio 中的实际界面" data-lightbox data-caption="在 OBS 窗口里就能完成扫码登录、改标题分区封面、看弹幕礼物榜单，并直接用左下角原生「开始直播」开播">
+          </div>
+          <div class="visual-caption">点击图片可放大 · 界面为插件真实面板在离线演示数据下的截图</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="why">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-tag">Why Livehime OBS</span>
+          <h2>把直播姬的功能装进 OBS，省心也省电脑资源</h2>
+          <p>如果你本来就习惯用 OBS 调画面、配麦克风和做场景切换，现在再也不用为了开播再去折腾直播姬或来回复制推流码了。</p>
+        </div>
+        <div class="compare-grid">
+          <div class="compare-card">
+            <h3>以前在 B 站用 OBS 开播 <span class="badge-pill badge-muted">双开 / 手动抓码</span></h3>
+            <ul class="compare-list">
+              <li><span class="mark-icon mark-old">✕</span><span>开着直播姬再挂 OBS，两套软件一起占 CPU 和内存，游戏容易掉帧。</span></li>
+              <li><span class="mark-icon mark-old">✕</span><span>每次开播都要手动复制服务器地址和推流码贴进 OBS，既麻烦又怕泄露。</span></li>
+              <li><span class="mark-icon mark-old">✕</span><span>临时想改标题、换分区或者换一张 4:3 封面，还得切回网页或客户端。</span></li>
+              <li><span class="mark-icon mark-old">✕</span><span>弹幕窗口、观众榜、大航海零散飘在桌面上，遮挡游戏还不好整理。</span></li>
+            </ul>
+          </div>
+          <div class="compare-card highlight">
+            <h3>现在用 Livehime OBS <span class="badge-pill badge-accent">原生融入 OBS</span></h3>
+            <ul class="compare-list">
+              <li><span class="mark-icon mark-new">✓</span><span><strong>点 OBS 原生按钮联动两端</strong>：直接点「控件」里的开始/停止直播即可开停播，不用学新按钮。</span></li>
+              <li><span class="mark-icon mark-new">✓</span><span><strong>推流密钥只留在内存里</strong>：开播后自动交给 OBS 推流，主播全程无需复制，也不保存到硬盘。</span></li>
+              <li><span class="mark-icon mark-new">✓</span><span><strong>断线重连同一场，下播自动复原</strong>：网络波动可继续重连当前场次，下播后自动恢复原 OBS 推流设置。</span></li>
+              <li><span class="mark-icon mark-new">✓</span><span><strong>开播管理 + 弹幕榜单全套自带</strong>：标题分区封面、弹幕礼物流水、观众与大航海、超管提醒全在 OBS 内搞定。</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="features">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-tag">Features</span>
+          <h2>主播关心的功能，一次配齐</h2>
+          <p>围绕真实开播场景打磨细节，从登录、开播准备到直播中看弹幕收提醒，全程流畅顺手。</p>
+        </div>
+        <div class="features-grid">
+          <article class="feature-card">
+            <div class="feature-icon">⚡</div>
+            <h3>点 OBS 原生按钮直接开停播</h3>
+            <p>直接联动 OBS 原本的「开始直播 / 停止直播」按钮和延迟推流入口。开播前自动帮你把刚改好的标题、封面同步到位；断线可重连同一场；下播成功后自动恢复开播前的 OBS 推流服务。</p>
+            <div class="feature-tags">
+              <span class="tag">无需额外开播按钮</span>
+              <span class="tag">断线重连同一场</span>
+              <span class="tag">下播复原配置</span>
+            </div>
+          </article>
+
+          <article class="feature-card pink">
+            <div class="feature-icon">🔐</div>
+            <h3>扫码登录加密，密钥不复制不落盘</h3>
+            <p>打开面板点「扫码登录」，用哔哩哔哩 App 扫一下就行，不碰你浏览器里的账号文件。登录会话使用当前 Windows 用户的 DPAPI 加密保存，本场推流密钥只留在进程内，完全不用自己复制。</p>
+            <div class="feature-tags">
+              <span class="tag">App 扫码登录</span>
+              <span class="tag">Windows 用户加密</span>
+              <span class="tag">零复制推流</span>
+            </div>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon">🎛️</div>
+            <h3>改标题、搜分区、裁 4:3 封面一步到位</h3>
+            <p>标题改完停手 1 秒自动保存；父分类和子分区两级联动，子分区打字就能直接搜索；鼠标点封面就能选本地图片，支持拖动构图和滚轮缩放，裁成标准 4:3 直接上传并显示审核状态。</p>
+            <div class="feature-tags">
+              <span class="tag">标题自动同步</span>
+              <span class="tag">打字搜分区</span>
+              <span class="tag">内置 4:3 封面裁切</span>
+            </div>
+          </article>
+
+          <article class="feature-card pink">
+            <div class="feature-icon">💬</div>
+            <h3>互动弹幕、观众榜、大航海三合一</h3>
+            <p>「直播互动」「房间观众」「大航海」三个面板可以直接吸附在 OBS 边上或合并成标签页，也能拖出来独立悬浮置顶。礼物流水和弹幕支持拆分查看，观众榜与大航海支持多种周期榜单切换。</p>
+            <div class="feature-tags">
+              <span class="tag">自由停靠 / 悬浮</span>
+              <span class="tag">礼物流水可拆分</span>
+              <span class="tag">记忆窗口布局</span>
+            </div>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon">🖱️</div>
+            <h3>单屏主播神器：悬浮鼠标穿透</h3>
+            <p>互动窗口单独悬浮置顶时，点一下「锁定穿透」，鼠标就能直接点穿弹幕窗口操作背后的游戏或软件。需要调整时，点主面板的「解除互动穿透」或重新打开窗口即可瞬间恢复。</p>
+            <div class="feature-tags">
+              <span class="tag">悬浮不挡操作</span>
+              <span class="tag">一键解除穿透</span>
+              <span class="tag">防误锁安全复位</span>
+            </div>
+          </article>
+
+          <article class="feature-card pink">
+            <div class="feature-icon">🛡️</div>
+            <h3>超管警告与整改提醒不错过</h3>
+            <p>就算你把互动面板关掉了，或者正开着鼠标穿透在打游戏，收到平台超管警告、内容整改提醒或切断通知时，OBS 主窗口都会立刻弹窗并响铃提醒，点按钮就能直达官方违规记录页。</p>
+            <div class="feature-tags">
+              <span class="tag">弹窗 + 提示音</span>
+              <span class="tag">穿透状态下仍可收</span>
+              <span class="tag">直达违规记录</span>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="screenshots">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-tag">Screenshots</span>
+          <h2>真实插件界面截图展示</h2>
+          <p>点下面标签切换不同面板截图，点击右侧或下方图片可放大查看细节。</p>
+        </div>
+
+        <div class="gallery-shell">
+          <div class="gallery-tabs" id="galleryTabs" role="tablist">
+            <button class="gallery-tab active" type="button" data-shot="docking" role="tab" aria-selected="true">OBS 工作区全景</button>
+            <button class="gallery-tab" type="button" data-shot="room" role="tab" aria-selected="false">B站直播主面板</button>
+            <button class="gallery-tab" type="button" data-shot="crop" role="tab" aria-selected="false">4:3 封面裁切器</button>
+            <button class="gallery-tab" type="button" data-shot="panels" role="tab" aria-selected="false">互动 / 观众 / 大航海</button>
+            <button class="gallery-tab" type="button" data-shot="moderation" role="tab" aria-selected="false">超管整改提醒</button>
+          </div>
+
+          <div class="gallery-stage">
+            <div class="gallery-preview">
+              <img id="galleryImage" src="assets/screenshots/obs-docking.png" alt="OBS 工作区全景截图" data-lightbox data-caption="OBS 工作区全景：B站直播面板、OBS 原生开始直播按钮与互动/榜单面板统一停靠在 OBS 内">
+            </div>
+            <div class="gallery-info">
+              <h3 id="galleryTitle">OBS 工作区全景 · 停靠布局与按钮联动</h3>
+              <p id="galleryDesc">把「B站直播」和弹幕、榜单面板直接停靠在 OBS 四周，布局会随着 OBS 自动保存，下次打开自动还原；左下角直接点 OBS 原本的「开始直播」即可开播。</p>
+              <ul class="gallery-bullets" id="galleryBullets">
+                <li>支持吸附在 OBS 任意边缘、合并成标签页，或者拖出来独立置顶悬浮</li>
+                <li>外接副屏拔掉后，原本在副屏上的悬浮窗会自动回到当前屏幕内</li>
+                <li>开播状态变化时，OBS 原生「开始 / 停止直播」按钮文字和可用状态同步联动</li>
+              </ul>
+              <div class="gallery-note">
+                注：截图使用离线演示数据生成，不含真实账号或直播间信息。
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="start">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-tag">Quick Start</span>
+          <h2>三步安装，马上在 OBS 里开播</h2>
+          <p>提供标准 Windows 安装程序，支持老版本直接升级，不会覆盖你原本的 OBS 场景、滤镜和设置。</p>
+        </div>
+
+        <div class="steps-grid three-cols">
+          <div class="step-card">
+            <div class="step-num">STEP 01</div>
+            <h3>安装插件</h3>
+            <p>先完全关闭 OBS，下载并运行 <code>livehime-obs-0.2.4-windows-x64-setup.exe</code>。已有旧版时直接运行即可原位升级，无需先卸载。</p>
+          </div>
+          <div class="step-card">
+            <div class="step-num">STEP 02</div>
+            <h3>打开面板扫码登录</h3>
+            <p>启动 OBS，在顶部「停靠窗口 / Docks」菜单勾选「B站直播」。点击「扫码登录」并用哔哩哔哩 App 扫码确认即可加载你的直播间。</p>
+          </div>
+          <div class="step-card">
+            <div class="step-num">STEP 03</div>
+            <h3>改好资料直接开播</h3>
+            <p>确认标题、分区和封面后，直接点 OBS「控件」里的原生「开始直播」按钮开播；下播时再点一次「停止直播」即可。</p>
+          </div>
+        </div>
+
+        <div class="notice-box">
+          <div class="info-panel">
+            <h3>使用前小贴士</h3>
+            <ul>
+              <li>建议为 B 站新建一个独立的 OBS 配置文件，采用普通 H.264 视频 / AAC 音频推流，并关闭「增强广播 / 多轨视频」。</li>
+              <li>若登录窗口提示缺少运行时，安装或修复 <a href="https://developer.microsoft.com/microsoft-edge/webview2/" target="_blank" rel="noopener" style="color:#67d6ff;text-decoration:underline;">Microsoft Edge WebView2 Runtime</a> 即可。</li>
+              <li>需要便携版手工部署可下载同版本 <code>.zip</code> 包；但已用安装器安装过的请继续用安装器升级，避免同时存在两份插件。</li>
+            </ul>
+          </div>
+          <div class="info-panel warn">
+            <h3>当前版本功能范围（v0.2.4）</h3>
+            <ul>
+              <li>本插件面向 <strong>Windows x64 + OBS Studio 33.0.1</strong>；请使用 OBS「控件」面板的按钮发起开停播，快捷键或托盘菜单暂不经过插件接管。</li>
+              <li>实时面板当前提供弹幕、礼物、SC、观众榜、大航海与超管提醒展示，暂未实现发弹幕、语音播报、礼物动画和房管操作。</li>
+              <li>退出 OBS 前请先正常下播；0.2.4 已对齐直播姬 8.15.0.11311 协议，新版协议下的实播授权与长播表现仍在持续验证中。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="hero-cta" style="margin-top:26px;margin-bottom:0;">
+          <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/download/v0.2.4/livehime-obs-0.2.4-windows-x64-setup.exe" target="_blank" rel="noopener">下载 Setup 安装器 (v0.2.4)</a>
+          <a class="btn btn-secondary" href="https://github.com/lightsing/livehime-obs/releases/download/v0.2.4/livehime-obs-0.2.4-windows-x64.zip" target="_blank" rel="noopener">下载便携 ZIP 包</a>
+          <a class="btn btn-secondary" href="tech.html">查看技术细节、安全架构与源码构建 →</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <div>
+        <strong>Livehime OBS</strong> · 开源协议 GPL-2.0-or-later · 独立第三方 OBS 插件，不附带直播姬程序，不代表哔哩哔哩官方产品。
+      </div>
+      <div class="footer-links">
+        <a href="tech.html">技术与构建</a>
+        <a href="https://github.com/lightsing/livehime-obs" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/lightsing/livehime-obs/releases" target="_blank" rel="noopener">历史版本</a>
+        <a href="https://github.com/lightsing/livehime-obs/blob/main/README.md" target="_blank" rel="noopener">README</a>
+      </div>
+    </div>
+  </footer>
+
+  <div class="lightbox" id="lightbox" aria-hidden="true">
+    <div class="lightbox-content">
+      <div class="lightbox-bar">
+        <span id="lightboxCaption"></span>
+        <button class="lightbox-close" id="lightboxClose" type="button">关闭 (ESC)</button>
+      </div>
+      <img id="lightboxImg" src="" alt="放大预览">
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
