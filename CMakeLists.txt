@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(livehime-obs VERSION 0.2.2 LANGUAGES C CXX)
+project(livehime-obs VERSION 0.2.3 LANGUAGES C CXX)
 
 include(cmake/ObsSdk.cmake)
 set(CMAKE_CXX_STANDARD 20)
@@ -70,7 +70,8 @@ target_compile_definitions(network-probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(network-probe PRIVATE /W4 /permissive- /utf-8 /EHsc)
 
 if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol-test.cpp")
-  add_executable(protocol-test tests/protocol-test.cpp src/protocol.cpp src/protocol.hpp)
+  add_executable(protocol-test tests/protocol-test.cpp src/protocol.cpp src/protocol.hpp
+    src/moderation-notice.cpp src/moderation-notice.hpp)
   target_include_directories(protocol-test PRIVATE src)
   target_link_libraries(protocol-test PRIVATE Qt6::Core Qt6::Gui Qt6::Network)
   target_compile_definitions(protocol-test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -147,6 +148,7 @@ if(BUILD_TESTING)
   add_test(NAME goim-codec-and-tcp COMMAND goim-test)
   set_tests_properties(goim-codec-and-tcp PROPERTIES TIMEOUT 60 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit")
   add_executable(realtime-state-test tests/realtime-state-test.cpp src/room-realtime.cpp src/room-realtime.hpp
+    src/moderation-notice.cpp src/moderation-notice.hpp
     src/live-controller.cpp src/live-controller.hpp src/session-store.cpp src/session-store.hpp src/bili-client.hpp src/obs-bridge.hpp
     src/protocol.cpp src/protocol.hpp src/goim-client.cpp src/goim-client.hpp src/goim-codec.cpp src/goim-codec.hpp src/gift-v2.cpp src/gift-v2.hpp)
   target_include_directories(realtime-state-test PRIVATE src "${GOIM_DEPS}/zlib-1.4" "${CMAKE_BINARY_DIR}/goim-zlib" "${GOIM_DEPS}/brotli-1.2.1/c/include")
@@ -155,7 +157,8 @@ if(BUILD_TESTING)
   target_compile_options(realtime-state-test PRIVATE /W4 /permissive- /utf-8 /EHsc)
   add_test(NAME realtime-state-isolation COMMAND realtime-state-test)
   set_tests_properties(realtime-state-isolation PROPERTIES TIMEOUT 30 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit")
-  add_executable(realtime-ui-test tests/realtime-ui-test.cpp src/floating-windows.cpp src/floating-windows.hpp src/display-asset-cache.cpp src/display-asset-cache.hpp src/room-realtime.hpp src/live-controller.hpp)
+  add_executable(realtime-ui-test tests/realtime-ui-test.cpp src/floating-windows.cpp src/floating-windows.hpp src/display-asset-cache.cpp src/display-asset-cache.hpp src/room-realtime.hpp src/live-controller.hpp
+    src/moderation-alerts.cpp src/moderation-alerts.hpp)
   target_include_directories(realtime-ui-test PRIVATE src)
   target_include_directories(realtime-ui-test SYSTEM PRIVATE "${OBS_SOURCE_ROOT}/libobs" "${OBS_SOURCE_ROOT}/frontend/api" "${OBS_SDK_ROOT}/include")
   target_link_libraries(realtime-ui-test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)

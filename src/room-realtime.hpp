@@ -1,5 +1,6 @@
 #pragma once
 #include "live-controller.hpp"
+#include "moderation-notice.hpp"
 #include <QJsonArray>
 #include <QNetworkReply>
 #include <QPointer>
@@ -30,7 +31,9 @@ class RoomRealtime final : public QObject {
     quint64 contextEpoch() const { return contextEpoch_; }
   signals:
     void events(const QJsonArray &batch);
+    void moderationNotice(const ModerationNotice &notice);
     void contextChanged();
+    void stopped();
     void rankConfigChanged();
     void statusChanged(const QString &status);
     void audienceChanged();

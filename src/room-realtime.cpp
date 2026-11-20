@@ -30,12 +30,15 @@ RoomRealtime::RoomRealtime(LiveController *controller, QObject *parent)
         connectEndpoint();
     });
     connect(goim_, &GoimClient::events, this, [this](const QJsonArray &batch) {
-        if (!uid_ || stopped_)
+        if (!uid_ || !roomId_ || stopped_)
             return;
-        emit events(batch);
         bool rank = false, guard = false;
         for (const auto &v : batch) {
-            const auto cmd = v.toObject().value("cmd").toString().section(':', 0, 0);
+            const auto event = v.toObject();
+            const auto notice = parseModerationNotice(event, roomId_);
+            if (notice && (notice->kind != ModerationNotice::Kind::Ecology || controller_->room().liveStatus == 1))
+                emit moderationNotice(*notice);
+            const auto cmd = event.value("cmd").toString().section(':', 0, 0);
             rank |= cmd == "ONLINE_RANK_V2" || cmd == "ONLINE_RANK_V3";
             guard |= cmd == "GUARD_BUY" || cmd == "USER_TOAST_MSG" || cmd == "USER_TOAST_MSG_V2";
         }
@@ -44,6 +47,7 @@ RoomRealtime::RoomRealtime(LiveController *controller, QObject *parent)
             audienceDirty_ = true;
         if (guard)
             guardDirty_ = true;
+        emit events(batch);
     });
     refreshTimer_.setInterval(1000);
     connect(&refreshTimer_, &QTimer::timeout, this, [this] {
@@ -78,6 +82,8 @@ void RoomRealtime::setStatus(const QString &status) {
     emit statusChanged(status);
 }
 void RoomRealtime::stop() {
+    if (stopped_)
+        return;
     stopped_ = true;
     ++contextEpoch_;
     ++audienceEpoch_;
@@ -90,6 +96,7 @@ void RoomRealtime::stop() {
         controller_->client()->cancelRealtime(guardReply_);
     }
     goim_->stop();
+    emit stopped();
 }
 void RoomRealtime::syncContext() {
     if (stopped_ || !controller_)

@@ -1,3 +1,4 @@
+#include "moderation-notice.hpp"
 #include "protocol.hpp"
 
 #include <QCoreApplication>
@@ -172,6 +173,112 @@ void transportDiagnostics()
     check(proxy.message.contains(QStringLiteral("代理")) && !proxy.message.contains(QStringLiteral("https://")),
           "proxy diagnostic contains no request URL");
 }
+void moderationNotices()
+{
+    constexpr qint64 room = 123;
+    const auto warning = object(R"({"cmd":"WARNING","roomid":123,"msg":"Please correct the stream."})");
+    const auto notice = parseModerationNotice(warning, room);
+    check(notice && notice->kind == ModerationNotice::Kind::Warning &&
+              notice->title == QStringLiteral("提示") && notice->body == "Please correct the stream.",
+          "WARNING displays the room-scoped top-level message");
+    check(!parseModerationNotice(warning, 456), "WARNING addressed to another room is ignored");
+    auto missingRoom = warning;
+    missingRoom.remove("roomid");
+    check(!parseModerationNotice(missingRoom, room), "legacy WARNING needs its target room");
+    auto chat = warning;
+    chat["cmd"] = "DANMU_MSG";
+    check(!parseModerationNotice(chat, room), "an ordinary chat message cannot raise a moderation notice");
+
+    auto cutoff = object(R"({
+        "cmd":"CUT_OFF","roomid":123,"msg":"Stream ended.",
+        "category":1,"pop":{"type":1,"title":"Room notice","msg":"Detailed reason.",
+                           "button_text":"Details","button_url":"https://live.bilibili.com/p/help"}
+    })");
+    const auto pop = parseModerationNotice(cutoff, room);
+    check(pop && pop->kind == ModerationNotice::Kind::CutOff && pop->title == "Room notice" &&
+              pop->body.contains("Detailed reason.") && pop->actions.size() == 1 &&
+              pop->actions.front().text == "Details" && pop->actions.front().url == QUrl("https://live.bilibili.com/p/help"),
+          "CUT_OFF category one displays the popup title and reason");
+    check(!parseModerationNotice(cutoff, 456), "CUT_OFF addressed to another room is ignored");
+    cutoff["category"] = 0;
+    const auto fallback = parseModerationNotice(cutoff, room);
+    check(fallback && fallback->body == "Stream ended." && fallback->actions.isEmpty(),
+          "ordinary CUT_OFF displays the top-level reason without popup controls");
+    cutoff["msg"] = "";
+    const auto emptyCutoff = parseModerationNotice(cutoff, room);
+    check(emptyCutoff && emptyCutoff->body == QStringLiteral("流被切断！"),
+          "ordinary CUT_OFF with an empty reason uses the native fallback");
+
+    const auto ecology = object(R"({
+        "cmd":"ANCHOR_ECOLOGY_LIVING_DIALOG","data":{
+            "timestamp":1720000000,
+            "dialog_title":"Review notice",
+            "dialog_message_list":[{"type":1,"label":"Reason","content":"First reason."},
+                                   {"type":2,"label":"Ignored label","content":"Final deadline."}],
+            "dialog_tip_list":[
+                {"show_platform":[1,4],"message_list":[
+                    {"type":1,"content":"Desktop advice.","link_url":"https://live.bilibili.com/p/unused"},
+                    {"type":2,"content":"Read the rules.","link_url":"https://live.bilibili.com/p/rules"}
+                ]},
+                {"show_platform":[1],"message_list":[{"type":1,"content":"Mobile advice."}]},
+                {"show_platform":["4"],"message_list":[{"type":1,"content":"Invalid platform."}]}
+            ],
+            "dialog_button_list":[
+                {"show_platform":[1],"button_action":2,"button_text":"Mobile details",
+                 "button_link_url":"https://live.bilibili.com/p/mobile"},
+                {"show_platform":[4],"button_action":2,"button_text":"Open details",
+                 "button_link_url":"https://live.bilibili.com/p/help"},
+                {"show_platform":[4],"button_action":1,"button_text":"Close",
+                 "button_link_url":"https://live.bilibili.com/p/unused"},
+                {"show_platform":[4],"button_action":1,"button_text":"Extra action"}
+            ]
+        }
+    })");
+    const auto dialog = parseModerationNotice(ecology, room);
+    check(dialog && dialog->kind == ModerationNotice::Kind::Ecology && dialog->timestamp == 1720000000 &&
+              dialog->title == "Review notice" &&
+              dialog->body.contains("Reason") && dialog->body.contains("First reason.") &&
+              !dialog->body.contains("Ignored label") &&
+              dialog->body.indexOf("Final deadline.") > dialog->body.indexOf("First reason."),
+          "structured ecology notice retains the title and ordered reasons");
+    check(dialog && dialog->tips.size() == 1 && dialog->tips[0].size() == 2 &&
+              dialog->tips[0][0].text == "Desktop advice." && dialog->tips[0][0].url.isEmpty() &&
+              dialog->tips[0][1].text == "Read the rules." &&
+              dialog->tips[0][1].url == QUrl("https://live.bilibili.com/p/rules"),
+          "desktop tip segments keep plain text and clickable links in order");
+    check(dialog && dialog->actions.size() == 2 && dialog->actions[0].text == "Open details" &&
+              dialog->actions[0].url == QUrl("https://live.bilibili.com/p/help") &&
+              dialog->actions[1].text == "Close" && dialog->actions[1].url.isEmpty(),
+          "the first two desktop buttons preserve link and close actions in order");
+    auto unsafeDialog = ecology;
+    auto unsafeData = unsafeDialog.value("data").toObject();
+    unsafeData["dialog_button_list"] = QJsonArray{object(R"({
+        "show_platform":[4],"button_action":2,"button_text":"Unsafe link","button_link_url":"file:///C:/synthetic.txt"
+    })")};
+    unsafeDialog["data"] = unsafeData;
+    const auto unsafe = parseModerationNotice(unsafeDialog, room);
+    check(unsafe && unsafe->actions.isEmpty(), "a local file cannot become a moderation action");
+
+    auto v2 = object(R"({
+        "cmd":"CUT_OFF_V2","data":{"timestamp":1720000001,"cut_off_version":1,"cut_off_data":{
+            "cut_off_title":"Stream cutoff",
+            "cut_off_message_list":[{"type":1,"label":"Reason","content":"Cutoff reason."}],
+            "cut_off_tip_list":[{"show_platform":[4],"message_list":[{"type":1,"content":"Cutoff advice."}]}]
+        }}
+    })");
+    const auto richCutoff = parseModerationNotice(v2, room);
+    check(richCutoff && richCutoff->kind == ModerationNotice::Kind::CutOffV2 && richCutoff->timestamp == 1720000001 &&
+              richCutoff->title == "Stream cutoff" && richCutoff->body.contains("Cutoff reason.") &&
+              richCutoff->tips.size() == 1 && richCutoff->tips[0].size() == 1 &&
+              richCutoff->tips[0][0].text == "Cutoff advice.",
+          "version-one CUT_OFF_V2 reads the nested cut_off_data fields");
+    auto v2Data = v2.value("data").toObject();
+    for (const auto &invalidVersion : {QJsonValue(2), QJsonValue("1")}) {
+        v2Data["cut_off_version"] = invalidVersion;
+        v2["data"] = v2Data;
+        check(!parseModerationNotice(v2, room), "unsupported CUT_OFF_V2 version rejected");
+    }
+}
 void cookieAndUrlBoundaries()
 {
     QNetworkCookie cookie("bili_jct", "synthetic");
@@ -247,6 +354,7 @@ int main(int argc, char **argv)
     try {
         originalMachineCodeVectors();
         responseFixtures();
+        moderationNotices();
         cookieAndUrlBoundaries();
         transportDiagnostics();
         areaFixtures();

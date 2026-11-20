@@ -114,11 +114,13 @@ int main(int argc, char **argv) {
     check(sent[0].operation == 7 && sent[0].version == 1 && sent[0].sequence == 1 &&
               login.value("protover").toInt() == 3 && !uuid.isEmpty(),
           "auth protocol fields");
+    peer->write(GoimCodec::frame(5, 1, "{\"cmd\":\"WARNING\",\"msg\":\"before auth\",\"roomid\":456}"));
     peer->write(GoimCodec::frame(8, 1, "{\"code\":0}"));
     peer->write(GoimCodec::frame(3, 1, QByteArray::fromHex("0000002a")));
     peer->write(GoimCodec::frame(5, 2, "{\"cmd\":\"TEST\",\"data\":{\"id\":\"not-an-ack\"}}"));
     peer->write(GoimCodec::frame(
-        5, 3, "{\"cmd\":\"TEST\",\"p_is_ack\":true,\"msg_id\":\"synthetic-id\",\"p_msg_type\":1}"));
+        5, 3, "{\"cmd\":\"WARNING\",\"roomid\":456,\"msg\":\"after auth\","
+              "\"p_is_ack\":true,\"msg_id\":\"synthetic-id\",\"p_msg_type\":1}"));
     check(waitFor([&] {
               readSent();
               return sent.size() >= 2 && events == 2;

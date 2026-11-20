@@ -1,10 +1,13 @@
 // Real presentation widgets with a main-thread, no-network realtime service double.
 #include "floating-windows.hpp"
+#include "moderation-alerts.hpp"
 #include "room-realtime.hpp"
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QEnterEvent>
 #include <QEventLoop>
@@ -20,6 +23,7 @@
 #include <QTemporaryDir>
 #include <QStyledItemDelegate>
 #include <QTextLayout>
+#include <QTextBrowser>
 #include <QtMath>
 #include <QVBoxLayout>
 #ifdef Q_OS_WIN
@@ -133,6 +137,8 @@ int main(int argc, char **argv) {
         palette.setColor(QPalette::Base, QColor("#181c24"));
         palette.setColor(QPalette::AlternateBase, QColor("#242a34"));
         palette.setColor(QPalette::Text, QColor("#f3f5f7"));
+        palette.setColor(QPalette::PlaceholderText, QColor("#b1bac7"));
+        palette.setColor(QPalette::Link, QColor("#89bdff"));
         palette.setColor(QPalette::Button, QColor("#343c49"));
         palette.setColor(QPalette::ButtonText, QColor("#f3f5f7"));
         palette.setColor(QPalette::Highlight, QColor("#5b73be"));
@@ -144,6 +150,85 @@ int main(int argc, char **argv) {
     QTemporaryDir dir;
     LiveController controller(dir.path());
     RoomRealtime service(&controller);
+    {
+        QMainWindow host;
+        host.show();
+        ModerationAlerts alerts(&service, &host);
+        auto *dialog = host.findChild<QDialog *>("livehime-moderation-dialog");
+        auto *body = dialog->findChild<QTextBrowser *>();
+        auto *buttons = dialog->findChild<QDialogButtonBox *>();
+        ModerationNotice warning;
+        warning.title = QStringLiteral("提示");
+        warning.body = QStringLiteral("测试警告 <b>保留原文</b>");
+        warning.id = "synthetic-1";
+        service.moderationNotice(warning);
+        service.moderationNotice(warning);
+        check(dialog->isVisible() && dialog->windowModality() == Qt::WindowModal &&
+              dialog->windowTitle() == warning.title && body->toPlainText() == warning.body,
+              "standalone host modal shows literal server text without an interaction dock");
+        check(buttons->buttons().size() == 1 &&
+              buttons->buttons().first()->text() == QStringLiteral("我知道了"),
+              "ordinary warning has the original acknowledgement");
+        buttons->buttons().first()->click();
+        settle();
+        check(!dialog->isVisible(), "a redelivered warning is acknowledged once");
+        auto *structured = host.findChild<QDialog *>("livehime-structured-moderation-dialog");
+        auto *richBody = structured->findChild<QTextBrowser *>();
+        ModerationNotice ecology;
+        ecology.kind = ModerationNotice::Kind::Ecology;
+        ecology.timestamp = 1;
+        ecology.title = QStringLiteral("直播内容整改提醒");
+        ecology.body = QStringLiteral("违规原因：测试画面包含不适宜展示的内容。\n整改要求：请切换画面后检查直播内容。");
+        const QUrl details(QStringLiteral("https://link.bilibili.com/"));
+        ecology.tips = {{{QStringLiteral("可前往"), {}}, {QStringLiteral("违规记录"), details},
+                         {QStringLiteral("查看详情。"), {}}}};
+        ecology.actions = {{QStringLiteral("查看详情"), details}, {QStringLiteral("我知道了"), {}}};
+        service.moderationNotice(ecology);
+        settle();
+        check(structured->isVisible() && structured->windowTitle() == ecology.title &&
+              richBody->toPlainText().contains(QStringLiteral("可前往违规记录查看详情。")),
+              "ecology notice displays ordered text and tips");
+        auto linkCursor = richBody->document()->find(QStringLiteral("违规记录"));
+        check(!linkCursor.isNull() && linkCursor.charFormat().anchorHref() == details.toString() &&
+              structured->findChild<QDialogButtonBox *>()->buttons().size() == 2,
+              "structured tips are inline links distinct from action buttons");
+        if (screenshots) {
+            const QDir output(qEnvironmentVariable("LIVEHIME_UI_SCREENSHOTS"));
+            output.mkpath(".");
+            check(structured->grab().save(output.filePath("moderation-notice.png")), "save synthetic notice preview");
+        }
+        auto update = ecology;
+        update.timestamp = 2;
+        update.body = "Updated reason";
+        service.moderationNotice(update);
+        service.moderationNotice(ecology);
+        check(richBody->toPlainText().startsWith(update.body), "stale ecology cannot overwrite a newer dialog");
+        warning.id = "synthetic-2";
+        service.moderationNotice(warning);
+        check(!structured->isVisible() && dialog->isVisible(), "a warning immediately replaces a live ecology prompt");
+        auto cutoff = update;
+        cutoff.kind = ModerationNotice::Kind::CutOffV2;
+        cutoff.title = "Cutoff";
+        service.moderationNotice(cutoff);
+        service.moderationNotice(ecology);
+        check(structured->isVisible() && structured->windowTitle() == cutoff.title,
+              "ecology cannot cover an active cutoff dialog");
+        structured->reject();
+        service.moderationNotice(ecology);
+        check(structured->isVisible() && structured->windowTitle() == ecology.title,
+              "timestamps only apply while a structured dialog is active");
+        warning.id = "synthetic-3";
+        service.moderationNotice(warning);
+        service.contextChanged();
+        settle();
+        check(!dialog->isVisible() && !structured->isVisible() && body->toPlainText().isEmpty(),
+              "room switch clears open and queued notices");
+        service.moderationNotice(warning);
+        check(dialog->isVisible(), "a new room has an independent message ID cache");
+        dialog->reject();
+        settle();
+        check(!dialog->isVisible(), "acknowledgement stays local and stale notices are not replayed");
+    }
     DisplayListModel bounded(3);
     for (int i = 0; i < 9; ++i)
         bounded.append(QString::number(i));

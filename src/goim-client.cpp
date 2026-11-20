@@ -205,7 +205,7 @@ class GoimWorker final : public QObject {
                     emit transportPacketObserved(generation_, 3);
                     deadline_->start(60000);
                     // No online-user/heat interpretation is assigned to this opaque transport value.
-                } else if (packet.operation == 5) {
+                } else if (packet.operation == 5 && authenticated_) {
                     QJsonParseError parse;
                     auto json = packet.body;
                     if (json.endsWith('\0'))

@@ -3,6 +3,7 @@
 #include "controller-test.cpp"
 #undef main
 #include "room-realtime.hpp"
+#include "goim-client.hpp"
 #include <QUrlQuery>
 
 namespace {
@@ -36,6 +37,27 @@ int main(int argc, char **argv) {
     LiveController controller(directory.path());
     RoomRealtime service(&controller);
     signIn(controller);
+    auto *transport = service.findChild<GoimClient *>();
+    QStringList notices;
+    QObject::connect(&service, &RoomRealtime::moderationNotice, [&](const ModerationNotice &notice) {
+        notices.append(notice.body);
+    });
+    const QJsonObject warning{{"cmd", "WARNING"}, {"msg", "first"}, {"roomid", serverRoom.roomId}};
+    const QJsonObject ecology{{"cmd", "ANCHOR_ECOLOGY_LIVING_DIALOG"},
+                              {"data", QJsonObject{{"dialog_title", "live only"}}}};
+    transport->events(QJsonArray{QJsonObject{{"cmd", "DANMU_MSG"}, {"msg", "pretend warning"}},
+                                 QJsonObject{{"cmd", "WARNING"}, {"msg", "other room"}, {"roomid", 999}},
+                                 ecology, warning});
+    check(notices == QStringList{"first"}, "only current-room moderation is delivered with all docks hidden");
+    check(starts == 0 && stops == 0, "displaying a moderation notice does not change stream state");
+    serverRoom.liveStatus = 1;
+    controller.refresh();
+    drain();
+    transport->events(QJsonArray{ecology});
+    check(notices.size() == 2, "ecology dialog is delivered when this room is live");
+    serverRoom.liveStatus = 0;
+    controller.refresh();
+    drain();
     int contextChanges = 0;
     QObject::connect(&service, &RoomRealtime::contextChanged, &app, [&] { ++contextChanges; });
     check(findRead("getDanmuInfo") >= 0, "authenticated room starts one realtime configuration");
@@ -88,10 +110,17 @@ int main(int argc, char **argv) {
     const auto epoch = service.contextEpoch();
     controller.logout();
     drain();
+    transport->events(QJsonArray{warning});
+    check(notices.size() == 2, "logged-out service ignores warnings");
     reply(staleAccount, QJsonObject{{"item", QJsonArray{QJsonObject{{"name", "leaked"}}}}});
     check(service.contextEpoch() > epoch && service.audienceData().isEmpty(),
           "logout clears model and invalidates late account callback");
+    int serviceStops = 0;
+    QObject::connect(&service, &RoomRealtime::stopped, &app, [&] { ++serviceStops; });
+    const int beforeStop = contextChanges;
     service.stop();
+    service.stop();
+    check(serviceStops == 1 && contextChanges == beforeStop, "shutdown clears alerts without reloading room views");
     {
         auto *owner = new LiveController(directory.path());
         auto *dependent = new RoomRealtime(owner);

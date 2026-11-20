@@ -1,4 +1,5 @@
 #include "floating-windows.hpp"
+#include "moderation-alerts.hpp"
 #include "room-dock.hpp"
 #include "room-realtime.hpp"
 #include <QAction>
@@ -158,6 +159,7 @@ void createRoomDock() {
     }
     controller = new livehime::LiveController(storage, dockContainer);
     realtime = new livehime::RoomRealtime(controller, dockContainer);
+    new livehime::ModerationAlerts(realtime, window);
     if (realtimeDocks[0] && realtimeDocks[1] && realtimeDocks[2])
         windows = new livehime::FloatingWindows(
             realtime, storage, window,
