@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Livehime OBS · 哔哩哔哩直播姬的 OBS 原生移植替代</title>
-  <meta name="description" content="哔哩哔哩直播姬的 OBS Studio 原生移植替代插件。无需双开直播姬，也不用复制推流码：在 OBS 内扫码登录、改标题分区裁封面、看弹幕礼物榜单、接超管提醒，点 OBS 原生按钮直接开停播。">
+  <meta name="description" content="哔哩哔哩直播姬的 OBS Studio 原生移植替代插件。无需 5000 粉推流码门槛、无需油猴脚本手动复制、也无需双开直播姬本地 RTMP 中转：在 OBS 内扫码登录、改标题分区裁封面、看弹幕礼物榜单、接超管提醒，点 OBS 原生按钮直接开停播。">
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -17,8 +17,8 @@
         <span class="brand-version">v0.2.4</span>
       </a>
       <nav class="nav-links" id="navLinks">
-        <a href="#why">为什么用它</a>
-        <a href="#features">能做什么</a>
+        <a href="#why">定位对比</a>
+        <a href="#features">核心功能</a>
         <a href="#screenshots">界面截图</a>
         <a href="#start">快速上手</a>
         <a href="tech.html">技术与构建</a>
@@ -37,12 +37,12 @@
         <div>
           <div class="eyebrow">
             <span class="eyebrow-dot"></span>
-            <span>哔哩哔哩直播姬 · OBS 原生替代插件（Windows）</span>
+            <span>哔哩哔哩直播姬 · OBS 原生移植替代（Windows）</span>
           </div>
-          <h1>告别双开与抓推流码，<br><span class="gradient-text">一个 OBS 直接开播 B 站</span></h1>
+          <h1>不用开直播姬、不用手动抄推流码，<br><span class="gradient-text">一个 OBS 直接开播 B 站</span></h1>
           <p class="hero-lead">
-            <strong>Livehime OBS</strong> 把哔哩哔哩直播姬的核心功能直接搬进了 <strong>OBS Studio</strong>。
-            不需要再同时开着直播姬，也不用每次手动复制粘贴推流码——点 OBS「控件」里的原生按钮就能联动两端开停播，断线可重连同一场，下播成功后自动恢复你原来的 OBS 推流设置。
+            <strong>Livehime OBS</strong> 将哔哩哔哩直播姬的开播与互动能力原生移植进 <strong>OBS Studio</strong>。
+            既不用受限于官方第三方推流码的 5000 粉门槛或靠油猴脚本手动复制，也不用再开着直播姬做本地 RTMP 中转——点 OBS「控件」里的原生按钮即可联动两端开停播，断线可重连同一场，下播成功后自动恢复原 OBS 推流服务；登录会话使用当前 Windows 用户的 DPAPI 加密，本场推流密钥只留在进程内。
           </p>
           <div class="hero-cta">
             <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/download/v0.2.4/livehime-obs-0.2.4-windows-x64-setup.exe" target="_blank" rel="noopener">
@@ -53,8 +53,8 @@
           </div>
           <div class="hero-specs">
             <div class="spec-item">
-              <span class="spec-label">开播操作</span>
-              <span class="spec-val">点 OBS 原生按钮直接播</span>
+              <span class="spec-label">开播方式</span>
+              <span class="spec-val">OBS 原生按钮直推</span>
             </div>
             <div class="spec-item">
               <span class="spec-label">适用环境</span>
@@ -62,7 +62,7 @@
             </div>
             <div class="spec-item">
               <span class="spec-label">账号安全</span>
-              <span class="spec-val">本机用户加密 · 密钥不落盘</span>
+              <span class="spec-val">DPAPI 加密 · 密钥不落盘</span>
             </div>
           </div>
         </div>
@@ -85,26 +85,24 @@
       <div class="container">
         <div class="section-header">
           <span class="section-tag">Why Livehime OBS</span>
-          <h2>把直播姬的功能装进 OBS，省心也省电脑资源</h2>
-          <p>如果你本来就习惯用 OBS 调画面、配麦克风和做场景切换，现在再也不用为了开播再去折腾直播姬或来回复制推流码了。</p>
+          <h2>为什么要在 OBS 里直接移植直播姬？</h2>
+          <p>如果你习惯用 OBS 的场景编排、滤镜插件和多音轨能力，过去往往只能在「受限于 5000 粉推流码 / 脚本手动复制」或「开着直播姬做本地 RTMP 中转」之间二选一。</p>
         </div>
         <div class="compare-grid">
           <div class="compare-card">
-            <h3>以前在 B 站用 OBS 开播 <span class="badge-pill badge-muted">双开 / 手动抓码</span></h3>
+            <h3>过去的常见开播方案 <span class="badge-pill badge-muted">推流码 / 本地接力</span></h3>
             <ul class="compare-list">
-              <li><span class="mark-icon mark-old">✕</span><span>开着直播姬再挂 OBS，两套软件一起占 CPU 和内存，游戏容易掉帧。</span></li>
-              <li><span class="mark-icon mark-old">✕</span><span>每次开播都要手动复制服务器地址和推流码贴进 OBS，既麻烦又怕泄露。</span></li>
-              <li><span class="mark-icon mark-old">✕</span><span>临时想改标题、换分区或者换一张 4:3 封面，还得切回网页或客户端。</span></li>
-              <li><span class="mark-icon mark-old">✕</span><span>弹幕窗口、观众榜、大航海零散飘在桌面上，遮挡游戏还不好整理。</span></li>
+              <li><span class="mark-icon mark-old">•</span><span><strong>仅用 OBS 填第三方推流码</strong>：官方获取第三方推流码需满足粉丝数 ≥ 5000；5000 粉以下常需借助油猴等脚本获取后手动复制进 OBS，且 OBS 自身不带 B 站房管、弹幕榜单和超管提示。</span></li>
+              <li><span class="mark-icon mark-old">•</span><span><strong>OBS + 直播姬本地 RTMP 接力</strong>：虽然直播姬本身具备改标题/分区/封面、弹幕穿透和榜单等功能，但为了使用 OBS 画面仍需同时运行整个直播姬客户端来监听本地 RTMP（静态密码），额外占用资源且需双端维护。</span></li>
             </ul>
           </div>
           <div class="compare-card highlight">
-            <h3>现在用 Livehime OBS <span class="badge-pill badge-accent">原生融入 OBS</span></h3>
+            <h3>现在用 Livehime OBS <span class="badge-pill badge-accent">单进程 OBS 原生替代</span></h3>
             <ul class="compare-list">
-              <li><span class="mark-icon mark-new">✓</span><span><strong>点 OBS 原生按钮联动两端</strong>：直接点「控件」里的开始/停止直播即可开停播，不用学新按钮。</span></li>
-              <li><span class="mark-icon mark-new">✓</span><span><strong>推流密钥只留在内存里</strong>：开播后自动交给 OBS 推流，主播全程无需复制，也不保存到硬盘。</span></li>
-              <li><span class="mark-icon mark-new">✓</span><span><strong>断线重连同一场，下播自动复原</strong>：网络波动可继续重连当前场次，下播后自动恢复原 OBS 推流设置。</span></li>
-              <li><span class="mark-icon mark-new">✓</span><span><strong>开播管理 + 弹幕榜单全套自带</strong>：标题分区封面、弹幕礼物流水、观众与大航海、超管提醒全在 OBS 内搞定。</span></li>
+              <li><span class="mark-icon mark-new">✓</span><span><strong>点 OBS 原生按钮联动两端</strong>：无需额外开播按钮，直接点击 OBS「控件」里的开始/停止直播即可请求 B 站开播并由 OBS 直接推流，无需运行直播姬或本地中转。</span></li>
+              <li><span class="mark-icon mark-new">✓</span><span><strong>无脚本复制、不留磁盘密钥</strong>：不需要油猴脚本手工抄推流码；会话由当前 Windows 用户 DPAPI 加密保存，本场推流密钥仅保留在进程内存中。</span></li>
+              <li><span class="mark-icon mark-new">✓</span><span><strong>断线重连同一场，下播自动复原</strong>：断网沿用 OBS 重连当前场次，下播成功后自动恢复开播前的 OBS 推流服务配置。</span></li>
+              <li><span class="mark-icon mark-new">✓</span><span><strong>完整移植直播姬核心面板</strong>：把改标题/分区/4:3 封面、弹幕穿透、观众/大航海榜单和超管提醒直接融入 OBS 原生停靠窗口。</span></li>
             </ul>
           </div>
         </div>
@@ -115,71 +113,71 @@
       <div class="container">
         <div class="section-header">
           <span class="section-tag">Features</span>
-          <h2>主播关心的功能，一次配齐</h2>
-          <p>围绕真实开播场景打磨细节，从登录、开播准备到直播中看弹幕收提醒，全程流畅顺手。</p>
+          <h2>把直播姬常用的开播与互动能力，原生带进 OBS</h2>
+          <p>在一个 OBS 窗口内完成开播前准备、原生推流联动、互动看弹幕与异常提醒，所有窗口随 OBS 布局记忆。</p>
         </div>
         <div class="features-grid">
           <article class="feature-card">
             <div class="feature-icon">⚡</div>
             <h3>点 OBS 原生按钮直接开停播</h3>
-            <p>直接联动 OBS 原本的「开始直播 / 停止直播」按钮和延迟推流入口。开播前自动帮你把刚改好的标题、封面同步到位；断线可重连同一场；下播成功后自动恢复开播前的 OBS 推流服务。</p>
+            <p>直接联动 OBS「控件」里的原生「开始直播 / 停止直播」按钮和延迟推流入口。开播前自动确保标题、封面已同步到位；断线可重连同一场；下播成功后自动恢复你开播前的 OBS 推流服务。</p>
             <div class="feature-tags">
               <span class="tag">无需额外开播按钮</span>
               <span class="tag">断线重连同一场</span>
-              <span class="tag">下播复原配置</span>
+              <span class="tag">下播复原服务</span>
             </div>
           </article>
 
           <article class="feature-card pink">
             <div class="feature-icon">🔐</div>
-            <h3>扫码登录加密，密钥不复制不落盘</h3>
-            <p>打开面板点「扫码登录」，用哔哩哔哩 App 扫一下就行，不碰你浏览器里的账号文件。登录会话使用当前 Windows 用户的 DPAPI 加密保存，本场推流密钥只留在进程内，完全不用自己复制。</p>
+            <h3>DPAPI 加密登录，密钥只留进程内</h3>
+            <p>面板内用哔哩哔哩 App 扫码登录，不读取系统浏览器账号文件。登录会话使用当前 Windows 用户的 DPAPI 加密保存，开播取得的推流密钥仅留在当前运行内存中，主播无需复制、也不会写入硬盘。</p>
             <div class="feature-tags">
               <span class="tag">App 扫码登录</span>
-              <span class="tag">Windows 用户加密</span>
-              <span class="tag">零复制推流</span>
+              <span class="tag">Windows DPAPI</span>
+              <span class="tag">无需手动复制</span>
             </div>
           </article>
 
           <article class="feature-card">
             <div class="feature-icon">🎛️</div>
-            <h3>改标题、搜分区、裁 4:3 封面一步到位</h3>
-            <p>标题改完停手 1 秒自动保存；父分类和子分区两级联动，子分区打字就能直接搜索；鼠标点封面就能选本地图片，支持拖动构图和滚轮缩放，裁成标准 4:3 直接上传并显示审核状态。</p>
+            <h3>标题、分区、4:3 封面原生管理</h3>
+            <p>把直播姬常用的开播设置移植进 OBS 面板：标题改完停手约 1 秒自动同步；父分类与子分区联动支持打字搜索；点击封面选图即可拖动、滚轮缩放并裁成标准 4:3 直接上传。</p>
             <div class="feature-tags">
               <span class="tag">标题自动同步</span>
               <span class="tag">打字搜分区</span>
-              <span class="tag">内置 4:3 封面裁切</span>
+              <span class="tag">4:3 封面裁切</span>
             </div>
           </article>
 
           <article class="feature-card pink">
             <div class="feature-icon">💬</div>
-            <h3>互动弹幕、观众榜、大航海三合一</h3>
-            <p>「直播互动」「房间观众」「大航海」三个面板可以直接吸附在 OBS 边上或合并成标签页，也能拖出来独立悬浮置顶。礼物流水和弹幕支持拆分查看，观众榜与大航海支持多种周期榜单切换。</p>
+            <h3>停靠 OBS 的弹幕、观众与大航海面板</h3>
+            <p>将「直播互动」「房间观众」「大航海」以 OBS 原生停靠面板形式集成进来，支持吸附 OBS 边缘、合并成标签页或拖出悬浮置顶，并随 OBS 记住布局。礼物流水支持独立拆分与合回。</p>
             <div class="feature-tags">
-              <span class="tag">自由停靠 / 悬浮</span>
+              <span class="tag">OBS 原生停靠</span>
               <span class="tag">礼物流水可拆分</span>
-              <span class="tag">记忆窗口布局</span>
+              <span class="tag">记住窗口布局</span>
             </div>
           </article>
 
           <article class="feature-card">
             <div class="feature-icon">🖱️</div>
-            <h3>单屏主播神器：悬浮鼠标穿透</h3>
-            <p>互动窗口单独悬浮置顶时，点一下「锁定穿透」，鼠标就能直接点穿弹幕窗口操作背后的游戏或软件。需要调整时，点主面板的「解除互动穿透」或重新打开窗口即可瞬间恢复。</p>
+            <h3>悬浮鼠标穿透与多入口快速解锁</h3>
+            <p>移植直播姬的悬浮防遮挡体验：互动面板独立悬浮时可开启「锁定穿透」，鼠标直接点穿操作游戏或桌面；需要调整时，点主面板「解除互动穿透」、OBS 工具菜单或重新打开即可恢复鼠标操作。</p>
             <div class="feature-tags">
-              <span class="tag">悬浮不挡操作</span>
-              <span class="tag">一键解除穿透</span>
-              <span class="tag">防误锁安全复位</span>
+              <span class="tag">仅浮动可穿透</span>
+              <span class="tag">主面板一键解锁</span>
+              <span class="tag">停靠/重启自动复位</span>
             </div>
           </article>
 
           <article class="feature-card pink">
             <div class="feature-icon">🛡️</div>
-            <h3>超管警告与整改提醒不错过</h3>
-            <p>就算你把互动面板关掉了，或者正开着鼠标穿透在打游戏，收到平台超管警告、内容整改提醒或切断通知时，OBS 主窗口都会立刻弹窗并响铃提醒，点按钮就能直达官方违规记录页。</p>
+            <h3>超管违规警告与切断提醒</h3>
+            <p>对齐直播姬的警告与切断提示流程。即使你隐藏了互动面板或正开着鼠标穿透，收到平台超管警告、内容整改提醒或切断通知时，OBS 主窗口仍会第一时间弹窗并响起警告音，支持一键打开违规记录。</p>
             <div class="feature-tags">
-              <span class="tag">弹窗 + 提示音</span>
+              <span class="tag">弹窗 + 警告音</span>
               <span class="tag">穿透状态下仍可收</span>
               <span class="tag">直达违规记录</span>
             </div>
@@ -230,7 +228,7 @@
       <div class="container">
         <div class="section-header">
           <span class="section-tag">Quick Start</span>
-          <h2>三步安装，马上在 OBS 里开播</h2>
+          <h2>三步安装，直接在 OBS 里开播</h2>
           <p>提供标准 Windows 安装程序，支持老版本直接升级，不会覆盖你原本的 OBS 场景、滤镜和设置。</p>
         </div>
 
