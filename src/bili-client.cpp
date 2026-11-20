@@ -183,6 +183,7 @@ QNetworkReply *BiliClient::send(const protocol::Request &draft, Callback<QJsonOb
     request.setRawHeader("Accept", "application/json");
     request.setRawHeader("User-Agent", protocol::userAgent());
     if (!deviceId_.isEmpty()) request.setRawHeader("buvid", deviceId_);
+    if (!draft.clientTraceId.isEmpty()) request.setRawHeader("client_traceid", draft.clientTraceId);
     if (web) {
         request.setRawHeader("Origin", "https://live.bilibili.com");
         request.setRawHeader("Referer", "https://live.bilibili.com/");
@@ -454,7 +455,7 @@ void BiliClient::startLive(qint64 roomId, int areaId, Callback<LiveSession> call
 {
     if (const auto error = sessionError()) { callback(*error); return; }
     if (roomId <= 0 || areaId <= 0) { callback(inputError(QStringLiteral("直播间或分区 ID 无效。"))); return; }
-    send(protocol::start(roomId, areaId, csrf(), now()),
+    send(protocol::start(roomId, areaId, csrf(), QDateTime::currentDateTimeUtc()),
         [roomId, callback = std::move(callback)](Result<QJsonObject> result) mutable {
         if (auto *error = std::get_if<ApiError>(&result)) { callback(*error); return; }
         callback(protocol::parseStart(roomId, std::get<QJsonObject>(result)));

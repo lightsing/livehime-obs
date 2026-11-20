@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QJsonObject>
 #include <QList>
 #include <QNetworkCookie>
@@ -48,6 +49,9 @@ struct RoomInfo {
 struct LiveSession { qint64 roomId = 0; QString server; QString key; };
 
 namespace protocol {
+inline constexpr char ClientVersion[] = "8.15.0.11311";
+inline constexpr int ClientBuild = 11311;
+
 // Byte ordering is unsigned and takes place BEFORE percent encoding.
 struct ByteLess { bool operator()(const QByteArray &, const QByteArray &) const; };
 using Params = std::map<QByteArray, QByteArray, ByteLess>;
@@ -56,6 +60,7 @@ struct Request {
     QUrl url;
     QByteArray body;
     QByteArray signedBytes;
+    QByteArray clientTraceId = {};
 };
 QByteArray escape(const QByteArray &bytes);
 QByteArray serialize(const Params &params);
@@ -63,7 +68,7 @@ QByteArray signature(const Params &unsignedParams);
 Params common(qint64 timestampSeconds);
 Request nav(qint64 timestampSeconds);
 Request title(const QString &title, const QByteArray &csrf, qint64 timestampSeconds);
-Request start(qint64 roomId, int areaId, const QByteArray &csrf, qint64 timestampSeconds);
+Request start(qint64 roomId, int areaId, const QByteArray &csrf, const QDateTime &startedAt);
 Request stop(qint64 roomId, const QByteArray &csrf, qint64 timestampSeconds);
 Request room(qint64 uid, qint64 timestampSeconds);
 Request preLive(qint64 timestampSeconds);

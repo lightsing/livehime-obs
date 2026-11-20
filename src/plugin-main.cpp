@@ -1,5 +1,6 @@
 #include "floating-windows.hpp"
 #include "moderation-alerts.hpp"
+#include "protocol.hpp"
 #include "room-dock.hpp"
 #include "room-realtime.hpp"
 #include <QAction>
@@ -210,7 +211,8 @@ void createRoomDock() {
     controller->initialize();
     blog(LOG_INFO,
          "[livehime-obs] Loaded version " LIVEHIME_OBS_VERSION
-         " (protocol profile 7.64.0.10819); shared realtime windows and native streaming controls attached");
+         " (protocol profile %s); shared realtime windows and native streaming controls attached",
+         livehime::protocol::ClientVersion);
 }
 } // namespace
 

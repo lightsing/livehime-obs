@@ -10,6 +10,8 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QStringList>
+#include <QSysInfo>
+#include <QUuid>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -121,9 +123,9 @@ QByteArray signature(const Params &params)
 }
 Params common(qint64 timestampSeconds)
 {
-    return {{"access_key", ""}, {"appkey", "aae92bc66f3edfab"}, {"build", "10819"},
+    return {{"access_key", ""}, {"appkey", "aae92bc66f3edfab"}, {"build", QByteArray::number(ClientBuild)},
             {"platform", "pc_link"}, {"ts", QByteArray::number(timestampSeconds)},
-            {"version", "7.64.0.10819"}};
+            {"version", ClientVersion}};
 }
 Request nav(qint64 timestampSeconds)
 {
@@ -143,15 +145,17 @@ Request title(const QString &value, const QByteArray &csrf, qint64 now)
     addCsrf(body, csrf);
     return {"POST", url, serialize(body), serialize(unsignedParams)};
 }
-Request start(qint64 roomId, int areaId, const QByteArray &csrf, qint64 now)
+Request start(qint64 roomId, int areaId, const QByteArray &csrf, const QDateTime &startedAt)
 {
-    auto p = common(now);
+    auto p = common(startedAt.toSecsSinceEpoch());
     p["room_id"] = QByteArray::number(roomId);
     p["area_v2"] = QByteArray::number(areaId);
     p["type"] = "2";
     addCsrf(p, csrf);
+    const QByteArray traceId = "PC_LINK:" + QUuid::createUuid().toByteArray(QUuid::WithoutBraces) +
+                               ':' + QByteArray::number(startedAt.toMSecsSinceEpoch());
     return {"POST", QUrl(QString::fromLatin1(LiveApi) + "/room/v1/Room/startLive"),
-            serialize(signedParams(p)), serialize(p)};
+            serialize(signedParams(p)), serialize(p), traceId};
 }
 Request stop(qint64 roomId, const QByteArray &csrf, qint64 now)
 {
@@ -213,7 +217,9 @@ Request cover(const QUrl &location, const QByteArray &csrf, const QByteArray &vi
 }
 QByteArray userAgent()
 {
-    return "LiveHime/7.64.0.10819 os/Windows pc_app/livehime build/10819 osVer/10.0_x86_64";
+    return QByteArray("LiveHime/") + ClientVersion + " os/Windows pc_app/livehime build/" +
+           QByteArray::number(ClientBuild) + " osVer/" + QSysInfo::kernelVersion().toLatin1() + '_' +
+           QSysInfo::currentCpuArchitecture().toLatin1() + " arch/x64";
 }
 bool isBilibiliHost(const QString &host)
 {

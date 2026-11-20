@@ -114,6 +114,8 @@ int main(int argc, char **argv) {
     check(sent[0].operation == 7 && sent[0].version == 1 && sent[0].sequence == 1 &&
               login.value("protover").toInt() == 3 && !uuid.isEmpty(),
           "auth protocol fields");
+    check(login.value("build").toInt() == 11311 && login.value("version_name").toString() == "8.15.0.11311",
+          "8.15 client profile on initial login");
     peer->write(GoimCodec::frame(5, 1, "{\"cmd\":\"WARNING\",\"msg\":\"before auth\",\"roomid\":456}"));
     peer->write(GoimCodec::frame(8, 1, "{\"code\":0}"));
     peer->write(GoimCodec::frame(3, 1, QByteArray::fromHex("0000002a")));
@@ -171,8 +173,10 @@ int main(int argc, char **argv) {
               return !sent.isEmpty();
           }),
           "refresh login");
-    check(QJsonDocument::fromJson(sent[0].body).object().value("build").toInt() == 10819,
-          "binary build auth");
+    const auto refreshedLogin = QJsonDocument::fromJson(sent[0].body).object();
+    check(refreshedLogin.value("build") == login.value("build") &&
+              refreshedLogin.value("version_name") == login.value("version_name"),
+          "client profile survives token refresh");
     peer->write(GoimCodec::frame(8, 1, "{\"code\":0}") + GoimCodec::frame(5, 1, "{\"cmd\":\"STALE\"}"));
     peer->flush();
     QThread::msleep(100); // Worker queues delivery while facade's event loop is paused.

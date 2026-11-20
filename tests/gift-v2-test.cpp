@@ -65,6 +65,24 @@ int main(int argc, char **argv) {
     }
     const auto valid = root(gift());
     check(decodeGiftV2Payload(valid).size() == 1, "minimal gift");
+    // 8.15 adds fields inside BlindGift, UserInfo and GiftItem.benefits.
+    const auto blindGift = number(6, 81) + number(7, 82);
+    const auto fansLightAnimation = bytes(1, "animation medal");
+    const auto benefits = bytes(2, fansLightAnimation);
+    const auto senderMedal = bytes(1, "sender medal");
+    const auto user = number(1, 42) + bytes(2, bytes(1, "private-sender") + bytes(2, "private-face"));
+    const auto updatedGift = root(gift() + bytes(38, benefits)) + bytes(9, blindGift);
+    const auto existingRow = decodeGiftV2(event(valid + bytes(15, user)));
+    const auto updatedRow = decodeGiftV2(event(updatedGift + bytes(15, user + bytes(3, senderMedal))));
+    check(existingRow.size() == 1 && updatedRow == existingRow,
+          "8.15 gift extensions retain displayed fields");
+    const auto anon = bytes(9, number(5, 1));
+    const auto existingAnonRow = decodeGiftV2(event(valid + bytes(15, user + anon)));
+    const auto updatedAnonRow =
+        decodeGiftV2(event(updatedGift + bytes(15, user + bytes(3, senderMedal) + anon)));
+    check(existingAnonRow.size() == 1 && updatedAnonRow == existingAnonRow &&
+              !QJsonDocument(updatedAnonRow).toJson().contains("private-"),
+          "8.15 anonymous gift extensions preserve masking");
     check(decodeGiftV2Payload(bytes(10, gift())).isEmpty(), "missing switch suppresses display");
     check(decodeGiftV2Payload(number(11, 0) + bytes(10, gift())).isEmpty(),
           "false switch suppresses display");

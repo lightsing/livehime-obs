@@ -9,6 +9,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QNetworkReply>
+#include <QRegularExpression>
 #include <stdexcept>
 
 using namespace livehime;
@@ -40,7 +41,7 @@ bool errorKind(const auto &result, ApiError::Kind kind)
     const auto *error = std::get_if<ApiError>(&result);
     return error && error->kind == kind;
 }
-void originalMachineCodeVectors()
+void protocolVectors()
 {
     const auto vectors = fixture(QStringLiteral("serialization-vectors.json"));
     const auto all = vectors.value(QStringLiteral("all_byte_escape")).toObject();
@@ -62,18 +63,31 @@ void originalMachineCodeVectors()
                            QByteArray::fromHex(row.value(QStringLiteral("right_hex")).toString().toLatin1())) ==
                   row.value(QStringLiteral("less")).toBool(), "original unsigned comparator");
     }
-    for (const auto &value : fixture(QStringLiteral("request-vectors.json")).value(QStringLiteral("results")).toArray()) {
+    const auto requests = fixture(QStringLiteral("request-vectors-8.15.json")).value(QStringLiteral("results")).toArray();
+    check(requests.size() == 3, "current profile has title, start and stop vectors");
+    const auto startedAt = QDateTime::fromMSecsSinceEpoch(1700000000123LL);
+    for (const auto &value : requests) {
         const auto row = value.toObject();
         const auto operation = row.value(QStringLiteral("operation")).toString();
         p::Request request;
         if (operation == QStringLiteral("title"))
             request = p::title(QString::fromUtf8("测试 !+&= 🎮"), "synthetic-csrf", 1700000000);
-        else if (operation == QStringLiteral("start")) request = p::start(12345, 1, "synthetic-csrf", 1700000000);
-        else request = p::stop(12345, "synthetic-csrf", 1700000000);
+        else if (operation == QStringLiteral("start")) request = p::start(12345, 1, "synthetic-csrf", startedAt);
+        else if (operation == QStringLiteral("stop")) request = p::stop(12345, "synthetic-csrf", 1700000000);
+        else throw std::runtime_error("unexpected request vector operation");
         check(request.method == "POST", "request method");
-        check(request.url.toEncoded() == row.value(QStringLiteral("url")).toString().toUtf8(), "original request exact URL");
-        check(request.body == row.value(QStringLiteral("body")).toString().toUtf8(), "original request exact body");
-        check(request.signedBytes == row.value(QStringLiteral("signed_bytes")).toString().toUtf8(), "original request signed snapshot");
+        check(request.url.toEncoded() == row.value(QStringLiteral("url")).toString().toUtf8(), "8.15 exact request URL");
+        check(request.body == row.value(QStringLiteral("body")).toString().toUtf8(), "8.15 exact request body");
+        check(request.signedBytes == row.value(QStringLiteral("signed_bytes")).toString().toUtf8(), "8.15 signed field snapshot");
+        if (operation == QStringLiteral("start")) {
+            const QRegularExpression traceFormat(QStringLiteral(
+                R"(^PC_LINK:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:1700000000123$)"));
+            check(traceFormat.match(QString::fromLatin1(request.clientTraceId)).hasMatch(), "start event trace format");
+            check(request.clientTraceId != p::start(12345, 1, "synthetic-csrf", startedAt).clientTraceId,
+                  "separate start attempts have distinct event traces");
+        } else {
+            check(request.clientTraceId.isEmpty(), "title and stop omit start event trace");
+        }
     }
     bool refused = false;
     try { (void)p::signature({{"sign", "old"}}); } catch (const std::invalid_argument &) { refused = true; }
@@ -337,7 +351,10 @@ int main(int argc, char **argv)
               "anchor danmu GET exact common and credential scope");
         p::Params params = p::common(1700000000);
         params.erase("build"); params["room_id"] = "123"; params["user_type"] = "0"; params["is_anchor"] = "true";
-        check(query.endsWith("version=7.64.0.10819") && query.contains("sign=" + p::signature(params)), "danmu signs all business fields");
+        check(query.endsWith("version=8.15.0.11311") && query.contains("sign=" + p::signature(params)), "danmu signs all business fields");
+        const QRegularExpression uaPattern(QStringLiteral(
+            R"(^LiveHime/8\.15\.0\.11311 os/Windows pc_app/livehime build/11311 osVer/\d+\.\d+\.\d+_[A-Za-z0-9_]+ arch/x64$)"));
+        check(uaPattern.match(QString::fromLatin1(p::userAgent())).hasMatch(), "8.15 Windows HTTP User-Agent");
         for (const auto &pair : QList<QPair<QString, QString>>{{"online_rank", "contribution_rank"}, {"online_rank", "entry_time_rank"},
             {"daily_rank", "today_rank"}, {"daily_rank", "yesterday_rank"}, {"weekly_rank", "current_week_rank"},
             {"weekly_rank", "last_week_rank"}, {"monthly_rank", "current_month_rank"}, {"monthly_rank", "last_month_rank"}, {"intimacy_rank", "intimacy_rank"}}) {
@@ -352,7 +369,7 @@ int main(int argc, char **argv)
         check(std::holds_alternative<RoomInfo>(parsed) && std::get<RoomInfo>(parsed).rankInfo.value("count").toInt() == 42, "room rank config preserved independently from rank data.config");
     }
     try {
-        originalMachineCodeVectors();
+        protocolVectors();
         responseFixtures();
         moderationNotices();
         cookieAndUrlBoundaries();

@@ -1,0 +1,24 @@
+{
+  "profile": "8.15.0.11311",
+  "scope": "Synthetic HTTP requests; all three expected digests were verified with the emulated 8.15 client routine.",
+  "results": [
+    {
+      "operation": "title",
+      "url": "https://api.live.bilibili.com/xlive/app-blink/v1/preLive/UpdatePreLiveInfo?access_key=&appkey=aae92bc66f3edfab&build=11311&platform=pc_link&sign=b63ca1b4e046c05630491bdfc4f548f2&ts=1700000000&version=8.15.0.11311",
+      "body": "access_key=&appkey=aae92bc66f3edfab&build=11311&csrf=synthetic-csrf&csrf_token=synthetic-csrf&mobi_app=pc_link&platform=pc_link&sign=b63ca1b4e046c05630491bdfc4f548f2&title=%E6%B5%8B%E8%AF%95%20!%2B%26%3D%20%F0%9F%8E%AE&ts=1700000000&version=8.15.0.11311",
+      "signed_bytes": "access_key=&appkey=aae92bc66f3edfab&build=11311&platform=pc_link&ts=1700000000&version=8.15.0.11311"
+    },
+    {
+      "operation": "start",
+      "url": "https://api.live.bilibili.com/room/v1/Room/startLive",
+      "body": "access_key=&appkey=aae92bc66f3edfab&area_v2=1&build=11311&csrf=synthetic-csrf&csrf_token=synthetic-csrf&platform=pc_link&room_id=12345&sign=3edce41b28ece1e5ae61a201a101c311&ts=1700000000&type=2&version=8.15.0.11311",
+      "signed_bytes": "access_key=&appkey=aae92bc66f3edfab&area_v2=1&build=11311&csrf=synthetic-csrf&csrf_token=synthetic-csrf&platform=pc_link&room_id=12345&ts=1700000000&type=2&version=8.15.0.11311"
+    },
+    {
+      "operation": "stop",
+      "url": "https://api.live.bilibili.com/room/v1/Room/stopLive",
+      "body": "access_key=&appkey=aae92bc66f3edfab&build=11311&csrf=synthetic-csrf&csrf_token=synthetic-csrf&platform=pc_link&room_id=12345&sign=5ae1e8f10e46fcb2ce827c1710167bf5&ts=1700000000&version=8.15.0.11311",
+      "signed_bytes": "access_key=&appkey=aae92bc66f3edfab&build=11311&platform=pc_link&room_id=12345&ts=1700000000&version=8.15.0.11311"
+    }
+  ]
+}

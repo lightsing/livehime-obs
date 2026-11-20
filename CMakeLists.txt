@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(livehime-obs VERSION 0.2.3 LANGUAGES C CXX)
+project(livehime-obs VERSION 0.2.4 LANGUAGES C CXX)
 
 include(cmake/ObsSdk.cmake)
 set(CMAKE_CXX_STANDARD 20)

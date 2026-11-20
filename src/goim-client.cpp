@@ -1,6 +1,7 @@
 #include "goim-client.hpp"
 #include "gift-v2.hpp"
 #include "goim-codec.hpp"
+#include "protocol.hpp"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPointer>
@@ -140,9 +141,9 @@ class GoimWorker final : public QObject {
                               {"mobi_app", "pc_link"},
                               {"platform", "pc_link"},
                               {"channel", "bili"},
-                              {"build", 10819},
+                              {"build", protocol::ClientBuild},
                               {"buvid", buvid_},
-                              {"version_name", "7.64.0.10819"},
+                              {"version_name", QString::fromLatin1(protocol::ClientVersion)},
                               {"device", "pc"},
                               {"osver", "Windows"},
                               {"support_ack", true},
