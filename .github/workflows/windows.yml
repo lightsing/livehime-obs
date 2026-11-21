@@ -469,8 +469,12 @@ jobs:
           }
           & npm publish "./canonical/$tarball" --access public --ignore-scripts --provenance --registry=https://registry.npmjs.org
           $publishExit = $LASTEXITCODE
-          foreach ($attempt in 1..5) {
+          # The registry can accept a publish and process it for several minutes before serving the tarball.
+          $waitSeconds = if ($publishExit -eq 0) { 360 } else { 15 }
+          $deadline = [DateTime]::UtcNow.AddSeconds($waitSeconds)
+          do {
             if ((Read-NpmStatus) -eq 'identical') { exit 0 }
-            if ($attempt -lt 5) { Start-Sleep -Seconds 3 }
-          }
+            if ([DateTime]::UtcNow -ge $deadline) { break }
+            Start-Sleep -Seconds 10
+          } while ($true)
           throw "The exact package was not confirmed on npm (publish exit $publishExit)."
