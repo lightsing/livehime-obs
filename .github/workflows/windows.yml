@@ -296,9 +296,15 @@ jobs:
             if ($records.Count -ne 1 -or $actual -cne $records[0].sha256) { throw "Asset verification failed: $name" }
           }
           @(
+            if ($env:RELEASE_VERSION -eq '0.4.1') {
+              '礼物流水现在可以单独停靠。在「直播互动」点「拆分礼物」，或从 OBS「停靠窗口 / Docks」打开「礼物流水」。点击「合回直播互动」可以将已有记录放回互动面板。'
+              ''
+            }
             "Windows x64 plugin for OBS Studio $($report.obsVersion) / Qt $($report.qtVersion).",
             '',
             'Close all OBS instances and run the setup EXE with administrator approval. It installs the shared plugin under ProgramData/obs-studio/plugins/livehime-obs. The ZIP keeps the legacy layout for portable OBS.',
+            '',
+            '从 0.4.0 起，已启用自动更新的插件会优先通过国内 npm 镜像下载更新。正常退出所有 OBS 实例后，安装向导会打开。',
             '',
             "Validated by CI: $($report.ctest.count) CTest tests, DLL dependency/export checks, and $($report.installer.count) isolated installer cases.",
             'These checks do not validate real-account streaming or room changes. The binaries are not Authenticode signed.',

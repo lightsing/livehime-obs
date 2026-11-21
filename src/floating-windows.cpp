@@ -4,12 +4,12 @@
 #include "room-realtime.hpp"
 #include <QApplication>
 #include <QCheckBox>
-#include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDialog>
 #include <QDir>
 #include <QDockWidget>
+#include <QEvent>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QJsonArray>
@@ -194,33 +194,6 @@ class DanmakuInput final : public QLineEdit {
     bool composing_ = false;
 };
 
-class Panel final : public QWidget {
-  public:
-    std::function<void(bool)> visibility;
-    std::function<void()> save;
-    explicit Panel(QWidget *p, bool floating = true) : QWidget(p, floating ? Qt::Window : Qt::Widget) {
-        setAttribute(Qt::WA_DeleteOnClose, false);
-        setMinimumSize(280, 240);
-    }
-
-  protected:
-    void closeEvent(QCloseEvent *e) override {
-        hide();
-        e->ignore();
-    }
-    void showEvent(QShowEvent *e) override {
-        QWidget::showEvent(e);
-        if (visibility)
-            visibility(true);
-    }
-    void hideEvent(QHideEvent *e) override {
-        QWidget::hideEvent(e);
-        if (save)
-            save();
-        if (visibility)
-            visibility(false);
-    }
-};
 class WrappedHistoryDelegate final : public QStyledItemDelegate {
   public:
     explicit WrappedHistoryDelegate(QListView *view) : QStyledItemDelegate(view), view_(view) {}
@@ -339,20 +312,20 @@ struct FloatingWindows::Impl {
     FloatingWindows *owner;
     QPointer<RoomRealtime> service;
     QSettings settings;
-    std::array<QPointer<QWidget>, 3> panels;
-    std::array<QPointer<QDockWidget>, 3> docks;
-    std::array<bool, 3> ownDocks{};
+    std::array<QPointer<QWidget>, DockCount> panels;
+    std::array<QPointer<QDockWidget>, DockCount> docks;
+    std::array<bool, DockCount> ownDocks{};
     QPointer<QMainWindow> host;
     bool ownHost = false, applyingFlags = false;
-    QCheckBox *pins[3]{};
-    QPushButton *modes[3]{}, *lockButton = nullptr;
-    QPointer<Panel> giftWindow;
+    QCheckBox *pins[DockCount]{};
+    QPushButton *modes[DockCount]{}, *lockButton = nullptr, *giftSplitButton = nullptr;
     QPointer<QDialog> entryDialog;
-    QVBoxLayout *interactionLayout{};
+    QVBoxLayout *interactionLayout{}, *giftLayout{};
     DisplayAssetCache assets;
     DisplayListModel messages{500}, gifts{500}, anti{100}, audience{100}, guard{5000};
-    HistoryView *messageView{}, *giftView{}, *antiView{};
-    QLabel *status[3]{}, *stats{};
+    HistoryView *messageView{}, *antiView{};
+    QPointer<HistoryView> giftView;
+    QLabel *status[DockCount]{}, *stats{};
     QComboBox *master{};
     QPushButton *secondary{}, *guardSecondary{}, *more{};
     QLabel *guardDescription{};
@@ -366,7 +339,7 @@ struct FloatingWindows::Impl {
     QSpinBox *fontSize{}, *minimumGift{}, *opacity{};
     QJsonArray history;
     QSet<QString> ids;
-    QTimer renderTimer;
+    QTimer renderTimer, giftVisibilityTimer;
     QQueue<qint64> eventSizes;
     qint64 historyBytes = 0;
     QString watched = QStringLiteral("—"), likes = QStringLiteral("—");
@@ -414,7 +387,7 @@ struct FloatingWindows::Impl {
         applyFlags(0); // Always clear native flags, even if our logical state was already false.
     }
     Impl(FloatingWindows *o, RoomRealtime *s, const QString &path, QWidget *p,
-         const std::array<QDockWidget *, 3> &registeredDocks)
+         const std::array<QDockWidget *, DockCount> &registeredDocks)
         : owner(o), service(s), settings(QDir(path).filePath("floating-windows.ini"), QSettings::IniFormat) {
         QDir().mkpath(path);
         host = qobject_cast<QMainWindow *>(p);
@@ -424,13 +397,11 @@ struct FloatingWindows::Impl {
         }
         for (auto m : {&messages, &gifts, &anti, &audience, &guard})
             m->setAssets(&assets);
-        const QStringList titles = {QStringLiteral("直播互动"), QStringLiteral("房间观众"),
-                                    QStringLiteral("大航海")};
-        std::array<QVBoxLayout *, 3> contentLayouts;
-        for (int k = 0; k < 3; ++k) {
+        std::array<QVBoxLayout *, DockCount> contentLayouts;
+        for (int k = 0; k < DockCount; ++k) {
             auto *dock = registeredDocks[k];
             if (!dock) {
-                dock = new QDockWidget(titles[k], host);
+                dock = new QDockWidget(FloatingWindows::dockTitle(k), host);
                 dock->setObjectName(QString::fromLatin1(FloatingWindows::dockId(k)));
                 dock->setAllowedAreas(Qt::AllDockWidgetAreas);
                 dock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
@@ -493,7 +464,7 @@ struct FloatingWindows::Impl {
                     return;
                 if (k == 0)
                     setLocked(false);
-                if (service)
+                if (service && k != GiftDock)
                     service->setVisible(k, v);
                 if (docks[k] && docks[k]->isFloating())
                     settings.setValue(QString("geometry%1").arg(k), docks[k]->saveGeometry());
@@ -521,9 +492,21 @@ struct FloatingWindows::Impl {
         buildInteraction(contentLayouts[0]);
         buildAudience(contentLayouts[1]);
         buildGuard(contentLayouts[2]);
+        giftLayout = contentLayouts[GiftDock];
+        auto *merge = new QPushButton(QStringLiteral("合回直播互动"));
+        merge->setObjectName("giftMerge");
+        giftLayout->addWidget(merge);
+        QObject::connect(merge, &QPushButton::clicked, owner, [this] { mergeGifts(); });
+        giftVisibilityTimer.setSingleShot(true);
+        QObject::connect(&giftVisibilityTimer, &QTimer::timeout, owner, [this] { syncGiftDock(); });
         renderTimer.setSingleShot(true);
         renderTimer.setInterval(50);
         QObject::connect(&renderTimer, &QTimer::timeout, owner, [this] { rebuild(); });
+        // OBS restores shell visibility before the presentation is attached. A hidden
+        // shell may belong to either an embedded list or a previously closed split list.
+        if (settings.value("giftSplit", false).toBool())
+            setGiftSplit(true);
+        syncGiftDock();
         QObject::connect(service.data(), &RoomRealtime::events, owner, [this](const QJsonArray &b) {
             if (stopped || !panels[0])
                 return;
@@ -539,7 +522,7 @@ struct FloatingWindows::Impl {
                     historyBytes -= eventSizes.dequeue();
                 }
             }
-            if ((panels[0]->isVisible() || (giftWindow && giftWindow->isVisible())) &&
+            if ((panels[0]->isVisible() || (docks[GiftDock] && docks[GiftDock]->isVisible())) &&
                 !renderTimer.isActive())
                 renderTimer.start();
         });
@@ -564,8 +547,12 @@ struct FloatingWindows::Impl {
         QObject::connect(service.data(), &RoomRealtime::rankConfigChanged, owner,
                          [this] { loadChoices(true); });
         QObject::connect(service.data(), &RoomRealtime::statusChanged, owner, [this](const QString &s) {
-            if (!stopped && panels[0])
+            if (stopped)
+                return;
+            if (panels[0])
                 status[0]->setText(s);
+            if (panels[GiftDock])
+                status[GiftDock]->setText(s);
         });
         QObject::connect(service.data(), &RoomRealtime::audienceChanged, owner,
                          [this] { renderRank(false); });
@@ -579,12 +566,7 @@ struct FloatingWindows::Impl {
         for (auto &dock : docks)
             if (dock)
                 QObject::disconnect(dock, nullptr, owner, nullptr);
-        if (giftWindow) {
-            giftWindow->visibility = {};
-            giftWindow->save = {};
-        }
-        delete giftWindow.data();
-        for (int k = 0; k < 3; ++k) {
+        for (int k = 0; k < DockCount; ++k) {
             if (ownDocks[k])
                 delete docks[k].data();
             else
@@ -664,6 +646,41 @@ struct FloatingWindows::Impl {
         entryDialog->raise();
         entryDialog->activateWindow();
     }
+    void setGiftSplit(bool wanted) {
+        if (split == wanted || !giftView || !panels[0] || !panels[GiftDock])
+            return;
+        split = wanted;
+        if (split) {
+            interactionLayout->removeWidget(giftView);
+            giftLayout->addWidget(giftView, 1);
+        } else {
+            giftLayout->removeWidget(giftView);
+            interactionLayout->insertWidget(interactionLayout->indexOf(messageView), giftView, 1);
+        }
+        giftView->setVisible(showGifts->isChecked());
+        giftSplitButton->setText(split ? QStringLiteral("合回礼物") : QStringLiteral("拆分礼物"));
+        settings.setValue("giftSplit", split);
+    }
+    void syncGiftDock() {
+        if (stopped || !panels[0] || !docks[GiftDock] || !giftView)
+            return;
+        // An inactive tab or a hidden main window still has an open dock.
+        const bool open = !docks[GiftDock]->isHidden();
+        if (open)
+            setGiftSplit(true);
+        if (split)
+            showGifts->setChecked(open);
+        if (open && !renderTimer.isActive())
+            renderTimer.start();
+    }
+    void mergeGifts() {
+        if (stopped || !panels[0] || !docks[GiftDock])
+            return;
+        setGiftSplit(false);
+        showGifts->setChecked(true);
+        docks[GiftDock]->hide();
+        owner->showWindow(0);
+    }
     void buildInteraction(QVBoxLayout *l) {
         interactionLayout = l;
         auto tools = new QGridLayout;
@@ -674,7 +691,8 @@ struct FloatingWindows::Impl {
             QStringLiteral("仅浮动时可用；在 B站直播主面板点击“解除互动穿透”或重新打开直播互动即可恢复"));
         auto config = new QPushButton(QStringLiteral("显示设置"));
         config->setObjectName("interaction-settings");
-        auto detach = new QPushButton(QStringLiteral("拆分/合回礼物"));
+        auto detach = giftSplitButton = new QPushButton(QStringLiteral("拆分礼物"));
+        detach->setObjectName("giftSplit");
         auto clear = new QPushButton(QStringLiteral("清屏"));
         int toolIndex = 0;
         for (auto b : {lock, config, detach, clear}) {
@@ -684,27 +702,10 @@ struct FloatingWindows::Impl {
         l->addLayout(tools);
         QObject::connect(lock, &QPushButton::clicked, owner, [this](bool checked) { setLocked(checked); });
         QObject::connect(detach, &QPushButton::clicked, owner, [this] {
-            split = !split;
-            giftView->setParent(nullptr);
-            if (split) {
-                if (!giftWindow) {
-                    giftWindow = new Panel(docks[0]);
-                    giftWindow->setWindowTitle(QStringLiteral("礼物流水"));
-                    giftWindow->resize(380, 320);
-                    new QVBoxLayout(giftWindow);
-                    giftWindow->visibility = [this](bool v) {
-                        if (!v && split && !stopped && panels[0])
-                            showGifts->setChecked(false);
-                    };
-                }
-                giftWindow->layout()->addWidget(giftView);
-                showGifts->setChecked(true);
-                giftWindow->show();
-            } else {
-                interactionLayout->insertWidget(interactionLayout->indexOf(messageView), giftView, 1);
-                giftWindow->hide();
-            }
-            updateAppearance();
+            if (split)
+                mergeGifts();
+            else
+                owner->showWindow(GiftDock);
         });
         QObject::connect(clear, &QPushButton::clicked, owner, [this] {
             history = {};
@@ -728,6 +729,12 @@ struct FloatingWindows::Impl {
         auto f = new QFormLayout(settingsPane);
         showAvatars = check("avatars", QStringLiteral("显示头像"), true, f);
         showGifts = check("gifts", QStringLiteral("礼物流水"), true, f);
+        QObject::connect(showGifts, &QCheckBox::toggled, owner, [this](bool visible) {
+            if (giftView)
+                giftView->setVisible(visible);
+            if (split && docks[GiftDock] && docks[GiftDock]->isHidden() == visible)
+                docks[GiftDock]->setVisible(visible);
+        });
         showAnti = check("anti", QStringLiteral("进房/关注/分享/点赞"), true, f);
         showMedal = check("medal", QStringLiteral("显示勋章文字"), true, f);
         showIdentity = check("identity", QStringLiteral("显示房管/航海身份"), true, f);
@@ -818,17 +825,18 @@ struct FloatingWindows::Impl {
             return;
         for (auto m : {&messages, &gifts, &anti, &audience, &guard})
             m->setAvatarsVisible(showAvatars->isChecked());
-        for (auto v : {messageView, giftView, antiView}) {
+        for (auto v : {messageView, giftView.data(), antiView}) {
+            if (!v)
+                continue;
             auto f = v->font();
             f.setPointSize(fontSize->value());
             v->setFont(f);
             v->pauseOnHover = pause->isChecked();
         }
         applyFlags(0);
-        giftView->setVisible(showGifts->isChecked());
+        if (giftView)
+            giftView->setVisible(showGifts->isChecked());
         antiView->setVisible(showAnti->isChecked() && anti.rowCount() > 0);
-        if (split && giftWindow)
-            giftWindow->setVisible(showGifts->isChecked());
     }
     void buildAudience(QVBoxLayout *l) {
         master = new QComboBox;
@@ -998,9 +1006,10 @@ struct FloatingWindows::Impl {
         }
     }
     void rebuild() {
-        if (!panels[0] || !stats ||
-            ((pause->isChecked() && messageView->hovered) || (pause->isChecked() && giftView->hovered) ||
-             (pause->isChecked() && antiView->hovered)))
+        if (stopped || !panels[0] || !stats)
+            return;
+        auto hovered = [](const HistoryView *view) { return view && view->isVisible() && view->hovered; };
+        if (pause->isChecked() && (hovered(messageView) || hovered(giftView) || hovered(antiView)))
             return;
         const int oldScroll = messageView->verticalScrollBar()->value();
         const bool hold = (pause->isChecked() && messageView->hovered) ||
@@ -1101,7 +1110,8 @@ struct FloatingWindows::Impl {
             messageView->verticalScrollBar()->setValue(oldScroll);
         else
             messageView->scrollToBottom();
-        giftView->follow();
+        if (giftView)
+            giftView->follow();
         antiView->follow();
     }
     void correct(QWidget *w) {
@@ -1119,41 +1129,64 @@ struct FloatingWindows::Impl {
     }
 };
 FloatingWindows::FloatingWindows(RoomRealtime *s, QString path, QWidget *p,
-                                 std::array<QDockWidget *, 3> registeredDocks)
-    : QObject(p), d(std::make_unique<Impl>(this, s, path, p, registeredDocks)) {}
+                                 std::array<QDockWidget *, DockCount> registeredDocks)
+    : QObject(p), d(std::make_unique<Impl>(this, s, path, p, registeredDocks)) {
+    d->docks[GiftDock]->installEventFilter(this);
+}
 FloatingWindows::~FloatingWindows() { shutdown(); }
+bool FloatingWindows::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == d->docks[GiftDock] && !d->stopped && !d->applyingFlags) {
+        // OBS blocks dock signals while handling its Docks menu. QWidget events
+        // still arrive; wait out temporary hides while Qt reparents a floating dock.
+        if (event->type() == QEvent::Show || event->type() == QEvent::ShowToParent)
+            d->syncGiftDock();
+        else if (event->type() == QEvent::Hide || event->type() == QEvent::HideToParent)
+            d->giftVisibilityTimer.start();
+    }
+    return QObject::eventFilter(watched, event);
+}
 const char *FloatingWindows::dockId(int kind) {
-    static constexpr std::array<const char *, 3> ids{"livehime-obs-interaction", "livehime-obs-audience",
-                                                     "livehime-obs-guard"};
-    return kind >= 0 && kind < 3 ? ids[kind] : "";
+    static constexpr std::array<const char *, DockCount> ids{
+        "livehime-obs-interaction", "livehime-obs-audience", "livehime-obs-guard", "livehime-obs-gifts"};
+    return kind >= 0 && kind < DockCount ? ids[kind] : "";
+}
+QString FloatingWindows::dockTitle(int kind) {
+    static const std::array<QString, DockCount> titles{QStringLiteral("直播互动"), QStringLiteral("房间观众"),
+                                                       QStringLiteral("大航海"), QStringLiteral("礼物流水")};
+    return kind >= 0 && kind < DockCount ? titles[kind] : QString{};
 }
 QDockWidget *FloatingWindows::dockWidget(int kind) const {
-    return kind >= 0 && kind < 3 ? d->docks[kind].data() : nullptr;
+    return kind >= 0 && kind < DockCount ? d->docks[kind].data() : nullptr;
 }
 QWidget *FloatingWindows::panelWidget(int kind) const {
-    return kind >= 0 && kind < 3 ? d->panels[kind].data() : nullptr;
+    return kind >= 0 && kind < DockCount ? d->panels[kind].data() : nullptr;
 }
 bool FloatingWindows::interactionLocked() const {
     return d->locked && d->docks[0] && d->docks[0]->isFloating() &&
            d->docks[0]->windowFlags().testFlag(Qt::WindowTransparentForInput);
 }
 void FloatingWindows::showWindow(int kind) {
-    if (kind < 0 || kind > 2 || d->stopped || !d->docks[kind])
+    if (kind < 0 || kind >= DockCount || d->stopped || !d->docks[kind])
         return;
     if (kind == 0)
         unlockInteraction();
+    if (kind == GiftDock) {
+        d->setGiftSplit(true);
+        if (d->panels[0])
+            d->showGifts->setChecked(true);
+    }
     auto *w = d->docks[kind].data();
     if (w->isFloating())
         d->correct(w);
     w->show();
-    if (kind == 0)
+    if (kind == 0 || kind == GiftDock)
         d->rebuild();
     w->raise();
     w->activateWindow();
 }
 void FloatingWindows::unlockInteraction() { d->setLocked(false); }
 void FloatingWindows::dockWindow(int kind) {
-    if (kind < 0 || kind > 2 || d->stopped || !d->docks[kind])
+    if (kind < 0 || kind >= DockCount || d->stopped || !d->docks[kind])
         return;
     if (kind == 0)
         unlockInteraction();
@@ -1165,7 +1198,7 @@ void FloatingWindows::dockWindow(int kind) {
     d->docks[kind]->raise();
 }
 void FloatingWindows::floatWindow(int kind) {
-    if (kind < 0 || kind > 2 || d->stopped || !d->docks[kind])
+    if (kind < 0 || kind >= DockCount || d->stopped || !d->docks[kind])
         return;
     if (kind == 0)
         unlockInteraction();
@@ -1178,17 +1211,19 @@ void FloatingWindows::shutdown() {
         return;
     unlockInteraction();
     d->stopped = true;
-    for (int k = 0; k < 3; ++k) {
+    d->renderTimer.stop();
+    d->giftVisibilityTimer.stop();
+    if (d->docks[GiftDock])
+        d->docks[GiftDock]->removeEventFilter(this);
+    for (int k = 0; k < DockCount; ++k) {
         if (!d->docks[k])
             continue;
         if (d->docks[k]->isFloating())
             d->settings.setValue(QString("geometry%1").arg(k), d->docks[k]->saveGeometry());
         d->docks[k]->hide();
-        if (d->service)
+        if (d->service && k != GiftDock)
             d->service->setVisible(k, false);
     }
-    if (d->giftWindow)
-        d->giftWindow->hide();
     if (d->entryDialog)
         d->entryDialog->close();
     d->settings.sync();

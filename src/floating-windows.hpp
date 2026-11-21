@@ -38,8 +38,10 @@ QList<RankChoice> audienceChoices(const QJsonObject &rankInfo);
 QString privateDisplayName(const QJsonObject &row);
 class FloatingWindows final : public QObject {
   public:
+    static constexpr int GiftDock = 3;
+    static constexpr int DockCount = 4;
     FloatingWindows(RoomRealtime *, QString storageDirectory, QWidget *parent = nullptr,
-                    std::array<QDockWidget *, 3> registeredDocks = {});
+                    std::array<QDockWidget *, DockCount> registeredDocks = {});
     ~FloatingWindows() override;
     void showWindow(int kind);
     void unlockInteraction();
@@ -49,9 +51,11 @@ class FloatingWindows final : public QObject {
     QWidget *panelWidget(int kind) const;
     bool interactionLocked() const;
     static const char *dockId(int kind);
+    static QString dockTitle(int kind);
     void shutdown();
 
   private:
+    bool eventFilter(QObject *watched, QEvent *event) override;
     struct Impl;
     std::unique_ptr<Impl> d;
 };

@@ -8,6 +8,9 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$versionMatch = [regex]::Match((Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'CMakeLists.txt')), 'project\(livehime-obs\s+VERSION\s+(\d+\.\d+\.\d+)\s')
+if (!$versionMatch.Success) { throw 'Cannot read the project version.' }
+$version = $versionMatch.Groups[1].Value
 $BuildDirectory = [IO.Path]::GetFullPath($BuildDirectory)
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 if (!(Test-Path -LiteralPath (Join-Path $BuildDirectory "$Configuration\livehime-obs.dll"))) {
@@ -27,7 +30,7 @@ $evidence = Join-Path $stage 'validation'
 New-Item -ItemType Directory -Force -Path $evidence | Out-Null
 foreach ($name in @('ctest-0.2.0.txt', 'realtime-qt-probe.json', 'load-0.2.0.json', 'loader-final-0.2.0.json', 'isolated-host-0.2.0.txt', 'installer-0.2.0.json', 'obs-exit-repeat-0.2.0.json', 'loader-0.2.1.json', 'installer-upgrade-0.2.1.json', 'installer-fresh-0.2.1.json', 'ctest-0.2.2.txt', 'loader-0.2.2.json', 'native-ui-0.2.2.json', 'installer-upgrade-0.2.2.json', 'obs-docks-0.2.2.json',
         'ctest-0.2.4.txt', 'loader-0.2.4.json', 'ctest-0.3.0.txt', 'loader-0.3.0.json',
-        'ctest-0.4.0.txt', 'loader-0.4.0.json')) {
+        'ctest-0.4.0.txt', 'loader-0.4.0.json', "ctest-$version.txt", "loader-$version.json")) {
     $source = Join-Path $projectRoot "validation\$name"
     if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $evidence }
 }
@@ -38,9 +41,7 @@ $hashes = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object {
     [ordered]@{ path = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/'); sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 })
 $hashes | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $stage 'SHA256SUMS.json') -Encoding utf8
-$versionMatch = [regex]::Match((Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'CMakeLists.txt')), 'project\(livehime-obs\s+VERSION\s+(\d+\.\d+\.\d+)\s')
-if (!$versionMatch.Success) { throw 'Cannot read the project version.' }
-$package = Join-Path $OutputDirectory "livehime-obs-$($versionMatch.Groups[1].Value)-windows-x64.zip"
+$package = Join-Path $OutputDirectory "livehime-obs-$version-windows-x64.zip"
 # Copying the new archive over an older generated artifact is intentional. No directory deletion.
 $temporaryArchive = Join-Path $OutputDirectory ('package-' + [guid]::NewGuid().ToString('N') + '.zip')
 [IO.Compression.ZipFile]::CreateFromDirectory($stage, $temporaryArchive, [IO.Compression.CompressionLevel]::Optimal, $false)

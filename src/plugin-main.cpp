@@ -14,6 +14,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <obs-module.h>
 #include <util/bmem.h>
 
@@ -26,23 +27,24 @@ MODULE_EXPORT const char *obs_module_name(void) { return "Livehime OBS"; }
 MODULE_EXPORT const char *obs_module_author(void) { return "Livehime OBS contributors"; }
 
 namespace {
+using livehime::FloatingWindows;
 QPointer<livehime::RoomDock> dock;
 QPointer<QWidget> dockContainer;
 QPointer<QLabel> loadingLabel;
 QPointer<livehime::LiveController> controller;
 QPointer<livehime::RoomRealtime> realtime;
-QPointer<livehime::FloatingWindows> windows;
+QPointer<FloatingWindows> windows;
 QPointer<livehime::UpdateController> updates;
-std::array<QPointer<QDockWidget>, 3> realtimeDocks;
+std::array<QPointer<QDockWidget>, FloatingWindows::DockCount> realtimeDocks;
 bool waitingForFrontend = false;
 bool frontendValid = true;
 void createRoomDock();
 void removeRealtimeDocks() {
     if (!frontendValid)
         return;
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < FloatingWindows::DockCount; ++i)
         if (realtimeDocks[i])
-            obs_frontend_remove_dock(livehime::FloatingWindows::dockId(i));
+            obs_frontend_remove_dock(FloatingWindows::dockId(i));
 }
 void frontendReady(obs_frontend_event event, void *) {
     if (event == OBS_FRONTEND_EVENT_EXIT) {
@@ -112,27 +114,29 @@ void obs_module_post_load(void) {
     char *configPath = obs_module_config_path("");
     const QString storage = configPath ? QString::fromUtf8(configPath) : QString{};
     bfree(configPath);
-    const QStringList titles{QStringLiteral("直播互动"), QStringLiteral("房间观众"),
-                             QStringLiteral("大航海")};
     bool registered = true;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < FloatingWindows::DockCount; ++i) {
         auto *shell = new QWidget;
         auto *shellLayout = new QVBoxLayout(shell);
         shellLayout->addWidget(new QLabel(QStringLiteral("正在加载实时面板…"), shell));
-        if (!obs_frontend_add_dock_by_id(livehime::FloatingWindows::dockId(i), titles[i].toUtf8().constData(),
-                                         shell)) {
+        const auto title = FloatingWindows::dockTitle(i).toUtf8();
+        if (!obs_frontend_add_dock_by_id(FloatingWindows::dockId(i), title.constData(), shell)) {
             delete shell;
             registered = false;
             break;
         }
         realtimeDocks[i] = qobject_cast<QDockWidget *>(shell->parentWidget());
         if (!realtimeDocks[i]) {
-            obs_frontend_remove_dock(livehime::FloatingWindows::dockId(i));
+            obs_frontend_remove_dock(FloatingWindows::dockId(i));
             registered = false;
             break;
         }
         realtimeDocks[i]->setAllowedAreas(Qt::AllDockWidgetAreas);
-        realtimeDocks[i]->resize(i == 0 ? 420 : 370, 580);
+        if (i == FloatingWindows::GiftDock) {
+            realtimeDocks[i]->resize(380, 320);
+        } else {
+            realtimeDocks[i]->resize(i == 0 ? 420 : 370, 580);
+        }
         if (!storage.isEmpty()) {
             QSettings settings(QDir(storage).filePath("floating-windows.ini"), QSettings::IniFormat);
             if (!settings.value("nativeDocks", false).toBool())
@@ -169,25 +173,23 @@ void createRoomDock() {
     controller = new livehime::LiveController(storage, dockContainer);
     realtime = new livehime::RoomRealtime(controller, dockContainer);
     new livehime::ModerationAlerts(realtime, window);
-    if (realtimeDocks[0] && realtimeDocks[1] && realtimeDocks[2])
-        windows = new livehime::FloatingWindows(
-            realtime, storage, window,
-            {realtimeDocks[0].data(), realtimeDocks[1].data(), realtimeDocks[2].data()});
+    std::array<QDockWidget *, FloatingWindows::DockCount> registeredDocks;
+    std::ranges::copy(realtimeDocks, registeredDocks.begin());
+    if (std::ranges::find(registeredDocks, nullptr) == registeredDocks.end())
+        windows = new FloatingWindows(realtime, storage, window, registeredDocks);
     dock = new livehime::RoomDock(controller, dockContainer);
     if (windows) {
         QObject::connect(dock, &livehime::RoomDock::openRealtimeWindow, windows,
-                         &livehime::FloatingWindows::showWindow);
+                         &FloatingWindows::showWindow);
         QObject::connect(dock, &livehime::RoomDock::unlockRealtimeInteraction, windows, [] {
             if (windows)
                 windows->showWindow(0);
         });
     } else
         dock->setRealtimeAvailable(false);
-    const QStringList labels{QStringLiteral("B站 · 直播互动"), QStringLiteral("B站 · 房间观众"),
-                             QStringLiteral("B站 · 大航海")};
-    for (int i = 0; i < labels.size(); ++i) {
-        auto *action =
-            static_cast<QAction *>(obs_frontend_add_tools_menu_qaction(labels.at(i).toUtf8().constData()));
+    for (int i = 0; i < FloatingWindows::DockCount; ++i) {
+        const auto label = (QStringLiteral("B站 · ") + FloatingWindows::dockTitle(i)).toUtf8();
+        auto *action = static_cast<QAction *>(obs_frontend_add_tools_menu_qaction(label.constData()));
         if (action)
             action->setEnabled(bool(windows));
         if (action && windows)

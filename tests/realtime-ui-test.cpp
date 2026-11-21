@@ -25,6 +25,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QStyledItemDelegate>
@@ -105,10 +106,10 @@ static QWidget *window(int k) {
             return w;
     return nullptr;
 }
-static std::array<QDockWidget *,3> registerShells(QMainWindow &host) {
-    std::array<QDockWidget *,3> docks{};
-    const QStringList titles={QStringLiteral("直播互动"),QStringLiteral("房间观众"),QStringLiteral("大航海")};
-    for(int k=0;k<3;++k){
+static std::array<QDockWidget *, FloatingWindows::DockCount> registerShells(QMainWindow &host) {
+    std::array<QDockWidget *, FloatingWindows::DockCount> docks{};
+    const QStringList titles={QStringLiteral("直播互动"),QStringLiteral("房间观众"),QStringLiteral("大航海"),QStringLiteral("礼物流水")};
+    for(int k=0;k<FloatingWindows::DockCount;++k){
         docks[k]=new QDockWidget(titles[k],&host);
         docks[k]->setObjectName(QString::fromLatin1(FloatingWindows::dockId(k)));
         docks[k]->setWidget(new QWidget);
@@ -163,6 +164,109 @@ static void checkSettingsWheel(QWidget *panel) {
         field->setValue(initial);
     }
     toggle->click();
+}
+
+static void checkGiftDock(QMainWindow &host, FloatingWindows &windows, RoomRealtime &service) {
+    auto *interaction = windows.dockWidget(0);
+    auto *giftDock = windows.dockWidget(FloatingWindows::GiftDock);
+    auto *split = interaction->findChild<QPushButton *>("giftSplit");
+    auto *merge = giftDock->findChild<QPushButton *>("giftMerge");
+    auto *showGifts = interaction->findChild<QCheckBox *>("gifts");
+    QPointer<QListView> history = interaction->findChild<QListView *>("giftHistory");
+    check(split && merge && showGifts && history && !giftDock->isVisible(), "gift history starts merged and offers a split control");
+    if (!split || !merge || !showGifts || !history) return;
+    QPointer<QAbstractItemModel> model = history->model();
+    auto addGift = [&](const QString &name) {
+        service.events(QJsonArray{QJsonObject{{"cmd", "SEND_GIFT"},
+            {"data", QJsonObject{{"uname", "viewer"}, {"giftName", name}, {"coin_type", "gold"}, {"num", 1}}}}});
+        settle();
+    };
+    auto rows = [&] {
+        QStringList result;
+        if (model)
+            for (int row = 0; row < model->rowCount(); ++row)
+                result.append(model->index(row, 0).data().toString());
+        return result;
+    };
+    windows.showWindow(0);
+    windows.dockWindow(0);
+    host.addDockWidget(Qt::RightDockWidgetArea, interaction);
+    addGift(QStringLiteral("拆分前的礼物"));
+    const auto before = rows();
+    check(before.size() == 1 && before.first().contains(QStringLiteral("拆分前的礼物")), "merged gift list shows the initial gift");
+
+    split->click();
+    settle();
+    check(giftDock->isVisible() && history && giftDock->isAncestorOf(history) && history->model() == model && rows() == before,
+          "splitting moves the existing history into the registered gift dock");
+    windows.dockWindow(FloatingWindows::GiftDock);
+    host.addDockWidget(Qt::LeftDockWidgetArea, giftDock);
+    check(!giftDock->isFloating() && host.dockWidgetArea(giftDock) == Qt::LeftDockWidgetArea &&
+          !interaction->isFloating() && host.dockWidgetArea(interaction) == Qt::RightDockWidgetArea,
+          "gift and interaction independently dock on opposite sides of the host");
+    auto *guard = windows.dockWidget(2);
+    windows.showWindow(2);
+    windows.dockWindow(2);
+    host.tabifyDockWidget(giftDock, guard);
+    guard->raise();
+    settle();
+    check(host.tabifiedDockWidgets(guard).contains(giftDock) && history && giftDock->isAncestorOf(history) && !giftDock->isHidden(),
+          "covering the gift dock with another tab keeps its history detached");
+    giftDock->raise();
+    settle();
+    check(history && history->isVisibleTo(giftDock) && rows() == before,
+          "returning to the gifts tab reveals the existing list without opening it again");
+    windows.floatWindow(FloatingWindows::GiftDock);
+    check(giftDock->isFloating() && !interaction->isFloating() && history && giftDock->isAncestorOf(history),
+          "floating the gifts leaves interaction docked");
+    interaction->hide();
+    addGift(QStringLiteral("拆分后的礼物"));
+    const auto after = rows();
+    check(giftDock->isVisible() && !interaction->isVisible() && after.size() == 2 && after.first() == before.value(0) &&
+          after.last().contains(QStringLiteral("拆分后的礼物")), "visible gift dock receives new gifts with interaction hidden");
+
+    windows.showWindow(0);
+    merge->click();
+    settle();
+    check(!giftDock->isVisible() && history && interaction->isAncestorOf(history) && history->model() == model && rows() == after,
+          "merge returns the same list and all rows to interaction");
+    {
+        // OBS changes dock visibility from its menu while blocking the dock's signals.
+        const QSignalBlocker block(giftDock);
+        giftDock->setVisible(true);
+        check(giftDock->isVisible() && history && history->isVisible() && giftDock->isAncestorOf(history) && rows() == after,
+              "opening gifts from the signal-blocked OBS menu immediately shows the existing list");
+    }
+    {
+        const QSignalBlocker block(giftDock);
+        giftDock->setVisible(false);
+    }
+    settle();
+    interaction->hide();
+    check(!interaction->isVisible() && !giftDock->isVisible() && !showGifts->isChecked() && history && giftDock->isAncestorOf(history),
+          "closing gifts from the signal-blocked OBS menu keeps the hidden list detached");
+    addGift(QStringLiteral("两个面板隐藏时收到的礼物"));
+    {
+        const QSignalBlocker block(giftDock);
+        giftDock->setVisible(true);
+    }
+    settle();
+    const auto reopened = rows();
+    check(!interaction->isVisible() && showGifts->isChecked() && history && history->isVisible() && giftDock->isAncestorOf(history) &&
+          history->model() == model && reopened.size() == 3 && reopened.mid(0, 2) == after &&
+          reopened.last().contains(QStringLiteral("两个面板隐藏时收到的礼物")),
+          "reopening gifts alone displays gifts received while both docks were hidden");
+
+    giftDock->close();
+    settle();
+    windows.showWindow(0);
+    check(giftDock->isHidden() && !showGifts->isChecked() && split->text() == QStringLiteral("合回礼物"),
+          "interaction offers to merge the closed gift dock");
+    split->click();
+    settle();
+    check(!giftDock->isVisible() && interaction->isVisible() && showGifts->isChecked() && history && history->isVisible() &&
+          interaction->isAncestorOf(history) && history->model() == model && rows() == reopened,
+          "explicitly merging a closed gift dock makes its entire history visible in interaction");
 }
 int main(int argc, char **argv) {
     const bool screenshots = !qEnvironmentVariable("LIVEHIME_UI_SCREENSHOTS").isEmpty();
@@ -337,11 +441,13 @@ int main(int argc, char **argv) {
             service.danmakuSendFinished(true, QStringLiteral("已发送"));
             check(input->text().isEmpty() && !send->isEnabled(), "confirmed send clears the draft");
         }
-        const char *expectedIds[]={"livehime-obs-interaction","livehime-obs-audience","livehime-obs-guard"};
-        for(int k=0;k<3;++k){
+        const char *expectedIds[]={"livehime-obs-interaction","livehime-obs-audience","livehime-obs-guard","livehime-obs-gifts"};
+        for(int k=0;k<FloatingWindows::DockCount;++k){
             check(QString::fromLatin1(FloatingWindows::dockId(k))==QString::fromLatin1(expectedIds[k]),"dock restore ID remains stable");
             check(windows.dockWidget(k)==registered[k],"reuses pre-registered OBS dock shell");
             check(windows.panelWidget(k)==registered[k]->widget(),"content injected into existing dock shell");
+        }
+        for(int k=0;k<3;++k){
             windows.showWindow(k);
             windows.dockWindow(k);
             check(!registered[k]->isFloating(),"each panel docks into the host");
@@ -431,14 +537,18 @@ int main(int argc, char **argv) {
     QByteArray savedDockState,savedHostGeometry;
     {
         QMainWindow host;
+        QTemporaryDir savedLayoutSettings;
         host.setCentralWidget(new QLabel(QStringLiteral("合成 OBS 布局保存")));
         host.resize(1100,720);host.show();
         auto registered=registerShells(host);
-        FloatingWindows windows(&service,dir.path(),&host,registered);
+        FloatingWindows windows(&service,savedLayoutSettings.path(),&host,registered);
         for(int k=0;k<3;++k)windows.showWindow(k);
         windows.dockWindow(0);host.addDockWidget(Qt::RightDockWidgetArea,registered[0]);
         windows.floatWindow(1);registered[1]->setGeometry(40,50,370,540);
         windows.dockWindow(2);host.addDockWidget(Qt::BottomDockWidgetArea,registered[2]);registered[2]->hide();
+        windows.showWindow(FloatingWindows::GiftDock);
+        windows.dockWindow(FloatingWindows::GiftDock);
+        host.addDockWidget(Qt::LeftDockWidgetArea, registered[FloatingWindows::GiftDock]);
         settle();savedDockState=host.saveState(23);savedHostGeometry=host.saveGeometry();
         check(!savedDockState.isEmpty(),"host saved its native dock layout before content shutdown");
         windows.shutdown();
@@ -451,14 +561,16 @@ int main(int argc, char **argv) {
         host.restoreGeometry(savedHostGeometry);
         check(host.restoreState(savedDockState,23),"host restores stable empty dock shells before panel injection");
         host.show();settle();
-        std::array<bool,3> floating{},visible{};
-        std::array<Qt::DockWidgetArea,3> areas{};
-        std::array<QRect,3> geometries{};
-        for(int k=0;k<3;++k){floating[k]=registered[k]->isFloating();visible[k]=registered[k]->isVisible();areas[k]=host.dockWidgetArea(registered[k]);geometries[k]=registered[k]->geometry();}
+        std::array<bool,FloatingWindows::DockCount> floating{},visible{};
+        std::array<Qt::DockWidgetArea,FloatingWindows::DockCount> areas{};
+        std::array<QRect,FloatingWindows::DockCount> geometries{};
+        for(int k=0;k<FloatingWindows::DockCount;++k){floating[k]=registered[k]->isFloating();visible[k]=registered[k]->isVisible();areas[k]=host.dockWidgetArea(registered[k]);geometries[k]=registered[k]->geometry();}
         check(!floating[0]&&floating[1]&&!floating[2]&&!visible[2],"saved layout includes docked floating and hidden states");
+        check(areas[0] == Qt::RightDockWidgetArea && visible[FloatingWindows::GiftDock] && !floating[FloatingWindows::GiftDock] &&
+              areas[FloatingWindows::GiftDock] == Qt::LeftDockWidgetArea, "host restores the independent gift dock opposite interaction");
         FloatingWindows windows(&service,freshPresentationSettings.path(),&host,registered);
         settle();
-        for(int k=0;k<3;++k){
+        for(int k=0;k<FloatingWindows::DockCount;++k){
             check(registered[k]->isFloating()==floating[k],"content injection preserves restored floating state");
             check(registered[k]->isVisible()==visible[k],"content injection preserves restored visibility");
             check(host.dockWidgetArea(registered[k])==areas[k],"content injection preserves restored dock area");
@@ -473,23 +585,25 @@ int main(int argc, char **argv) {
                           "restored tiny virtual-screen shell expands only to usable panel constraints");
             }
         }
+        auto *restoredGift = registered[FloatingWindows::GiftDock]->findChild<QListView *>("giftHistory");
+        check(restoredGift && restoredGift->isVisible() && !registered[0]->findChild<QListView *>("giftHistory"),
+              "the restored gift dock contains the single visible history after content injection");
         windows.shutdown();
     }
     {
         QMainWindow host;
+        QTemporaryDir giftSettings;
+        host.resize(1100,720);
         host.show();
         auto shells=registerShells(host);
-        auto windows=new FloatingWindows(&service,dir.path(),&host,shells);
-        windows->floatWindow(0);windows->showWindow(0);
-        auto panel=windows->panelWidget(0);
-        auto gift=panel->findChild<QListView *>("giftHistory");
-        for(auto button:panel->findChildren<QPushButton *>())
-            if(button->text().contains(QStringLiteral("拆分/合回")))button->click();
-        QPointer<QWidget> splitWindow=gift->window();
-        check(splitWindow&&splitWindow!=shells[0],"lifecycle fixture opens split gift window");
+        auto windows=new FloatingWindows(&service,giftSettings.path(),&host,shells);
+        checkGiftDock(host, *windows, service);
+        windows->showWindow(FloatingWindows::GiftDock);
+        QPointer<QListView> splitHistory = shells[FloatingWindows::GiftDock]->findChild<QListView *>("giftHistory");
+        check(splitHistory, "gift dock owns its detached history before teardown");
         windows->shutdown();
         for(auto shell:shells)delete shell;
-        check(splitWindow.isNull(),"OBS dock removal destroys its split gift child");
+        check(splitHistory.isNull(),"OBS dock removal releases the detached gift list");
         delete windows;
         service.events(QJsonArray{QJsonObject{{"cmd","WATCHED_CHANGE"},{"data",QJsonObject{{"num",3}}}}});
         settle();
@@ -497,7 +611,7 @@ int main(int argc, char **argv) {
     }
     {
         FloatingWindows windows(&service, dir.path());
-        for(int k=0;k<3;++k)
+        for(int k=0;k<FloatingWindows::DockCount;++k)
             check(windows.dockWidget(k)->isFloating()&&!windows.dockWidget(k)->isVisible(),
                   "fallback shells initially float and remain hidden");
         for (int k = 0; k < 3; ++k)
@@ -616,7 +730,6 @@ int main(int argc, char **argv) {
         windows.showWindow(0);
         auto a = window(0);
         auto msg = a->findChild<QListView *>("messageHistory");
-        auto gift = a->findChild<QListView *>("giftHistory");
         QCheckBox *pause = nullptr;
         for (auto c : a->findChildren<QCheckBox *>())
             if (c->text().contains(QStringLiteral("悬停")))
@@ -637,14 +750,6 @@ int main(int argc, char **argv) {
         check(msg->model()->rowCount() == 1,
               "leave displays pending messages and safely ignores malformed event");
         pause->setChecked(false);
-        auto shared = gift->model();
-        for (auto b : a->findChildren<QPushButton *>())
-            if (b->text().contains(QStringLiteral("拆分/合回"))) {
-                b->click();
-                check(gift->model() == shared && gift->window() != windows.dockWidget(0), "split keeps shared gift model");
-                b->click();
-                check(gift->model() == shared && gift->window() == windows.dockWidget(0), "rejoin keeps shared gift model");
-            }
         windows.shutdown();
     }
     {
