@@ -1,10 +1,13 @@
 // Real presentation widgets with a main-thread, no-network realtime service double.
+#include "dock-focus.hpp"
 #include "floating-windows.hpp"
 #include "moderation-alerts.hpp"
 #include "room-realtime.hpp"
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDeadlineTimer>
+#include <QDebug>
 #include <QDir>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -15,29 +18,38 @@
 #include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QLineEdit>
 #include <QListView>
 #include <QMainWindow>
+#include <QNetworkProxy>
 #include <QLabel>
 #include <QPainter>
 #include <QPushButton>
+#include <QRegion>
 #include <QScreen>
+#include <QScopeGuard>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QStandardItemModel>
 #include <QTemporaryDir>
 #include <QStyledItemDelegate>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTextLayout>
 #include <QTextBrowser>
 #include <QtMath>
 #include <QVBoxLayout>
 #include <QWheelEvent>
+#include <QWindow>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #pragma comment(lib, "user32.lib")
 #endif
+#include <algorithm>
 #include <iostream>
 
 namespace livehime {
@@ -50,8 +62,11 @@ LiveController::~LiveController() = default;
 RoomRealtime::RoomRealtime(LiveController *c, QObject *p) : QObject(p), controller_(c), goim_(nullptr) {
     entryHistory_ = fixtureEntries;
     connect(this, &RoomRealtime::entryHistoryChanged, this, [this] { entryHistory_ = fixtureEntries; });
-    uid_ = 123;
-    roomId_ = 456;
+    if (c) {
+        uid_ = 123;
+        roomId_ = 456;
+    }
+    connect(this, &RoomRealtime::danmakuSendFinished, this, [this] { sendingDanmaku_ = false; });
     status_ = QStringLiteral("离线合成数据 · 布局验证");
     audienceStatus_ = guardStatus_ = QStringLiteral("离线合成数据");
     audience_ = QJsonObject{
@@ -74,8 +89,11 @@ RoomRealtime::RoomRealtime(LiveController *c, QObject *p) : QObject(p), controll
 RoomRealtime::~RoomRealtime() = default;
 static QString lastType, lastSort;
 static int lastGuard = 0;
-static QString postedText;
-void RoomRealtime::sendDanmaku(const QString &text) { postedText = text; }
+static QStringList postedMessages;
+void RoomRealtime::sendDanmaku(const QString &text) {
+    postedMessages.append(text);
+    sendingDanmaku_ = true;
+}
 void RoomRealtime::setVisible(int, bool) {}
 void RoomRealtime::selectAudience(const QString &t, const QString &s) {
     lastType = t;
@@ -89,9 +107,9 @@ void RoomRealtime::stop() {}
 } // namespace livehime
 using namespace livehime;
 static int failures = 0;
-static void settle() {
+static void settle(int milliseconds = 80) {
     QEventLoop loop;
-    QTimer::singleShot(80, &loop, &QEventLoop::quit);
+    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
     loop.exec();
 }
 static void check(bool ok, const char *m) {
@@ -118,6 +136,110 @@ static std::array<QDockWidget *, FloatingWindows::DockCount> registerShells(QMai
     }
     return docks;
 }
+
+static void checkIndependentFloat(QDockWidget *dock, QMainWindow &host) {
+    auto *window = dock->windowHandle();
+    check(dock->isFloating() && window && !window->transientParent(),
+          "floating panel has an independent Qt window without a transient owner");
+    check(!dock->windowFlags().testFlag(Qt::WindowDoesNotAcceptFocus),
+          "independent floating panel still accepts keyboard focus");
+    check(host.findChild<QDockWidget *>(dock->objectName()) == dock,
+          "independent floating panel still belongs to the original host widget tree");
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == "windows" && window) {
+        const auto hwnd = reinterpret_cast<HWND>(window->winId());
+        check(IsWindow(hwnd) && GetWindow(hwnd, GW_OWNER) == nullptr,
+              "floating panel has no native owner that could raise OBS alongside it");
+        check((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_NOACTIVATE) == 0,
+              "native floating panel remains activatable");
+    }
+#endif
+}
+
+static void checkFloatingEditor(QDockWidget *dock, QLineEdit *editor) {
+    check(editor && dock->isAncestorOf(editor), "floating panel retains its editor");
+    if (!editor) return;
+    dock->activateWindow();
+    settle();
+    if (QGuiApplication::platformName() == "minimal") {
+        QT_WARNING_PUSH
+        QT_WARNING_DISABLE_DEPRECATED
+        QApplication::setActiveWindow(dock);
+        QT_WARNING_POP
+    }
+    editor->setFocus(Qt::TabFocusReason);
+    check(QApplication::focusWidget() == editor, "floating panel editor can take keyboard focus");
+    const auto initial = editor->text();
+    QKeyEvent key(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier, "a");
+    if (dock->windowHandle())
+        QApplication::sendEvent(dock->windowHandle(), &key);
+    check(editor->text() == initial + "a", "key dispatch through the floating window reaches its focused editor");
+}
+
+static void checkDockFocus(RoomRealtime &service) {
+    QTemporaryDir settings;
+    QMainWindow host;
+    host.setCentralWidget(new QWidget);
+    host.resize(1000, 620);
+    auto *room = new QDockWidget(QStringLiteral("B站直播"), &host);
+    room->setObjectName("livehime-obs-room");
+    auto *title = new QLineEdit;
+    room->setWidget(title);
+    host.addDockWidget(Qt::LeftDockWidgetArea, room);
+    auto shells = registerShells(host);
+    host.show();
+    installDockFocusPolicy(room, &host);
+    FloatingWindows windows(&service, settings.path(), &host, shells);
+    const auto hostFlags = host.windowFlags();
+
+    room->setFloating(true);
+    {
+        const QSignalBlocker block(room);
+        room->hide();
+        room->show();
+    }
+    settle();
+    checkIndependentFloat(room, host);
+    checkFloatingEditor(room, title);
+    const auto layout = host.saveState(41);
+    room->setFloating(false);
+    check(room->window() == &host && host.dockWidgetArea(room) == Qt::LeftDockWidgetArea,
+          "room panel redocks into its original host area");
+    check(host.restoreState(layout, 41), "host restores the native floating room layout");
+    settle();
+    checkIndependentFloat(room, host);
+    for (int kind = 0; kind < FloatingWindows::DockCount; ++kind) {
+        auto *dock = shells[kind];
+        windows.floatWindow(kind);
+        settle();
+        checkIndependentFloat(dock, host);
+        auto *pin = dock->findChild<QCheckBox *>(QString("window-pin-%1").arg(kind));
+        check(pin && pin->isEnabled(), "floating realtime panel exposes its pin control");
+        if (pin) {
+            for (bool pinned : {false, true}) {
+                pin->setChecked(pinned);
+                settle();
+                check(dock->windowFlags().testFlag(Qt::WindowStaysOnTopHint) == pinned,
+                      "floating realtime panel applies its own pin setting");
+                checkIndependentFloat(dock, host);
+            }
+        }
+        if (kind == 0)
+            checkFloatingEditor(dock, dock->findChild<QLineEdit *>("danmakuInput"));
+        windows.dockWindow(kind);
+        check(dock->window() == &host && host.windowFlags() == hostFlags,
+              "redocking keeps the original main window and its flags");
+    }
+    host.showMinimized();
+    settle();
+    windows.floatWindow(0);
+    settle();
+    check(host.isMinimized() && shells[0]->isVisible() && !shells[0]->isMinimized(),
+          "opening an independent panel keeps the OBS host minimized");
+    checkIndependentFloat(shells[0], host);
+    host.showNormal();
+    windows.shutdown();
+}
 static void checkUnlocked(FloatingWindows &windows,const char *reason) {
     auto dock=windows.dockWidget(0);
     auto button=windows.panelWidget(0)->findChild<QPushButton *>("interaction-lock");
@@ -129,6 +251,220 @@ static void checkUnlocked(FloatingWindows &windows,const char *reason) {
         check((GetWindowLongPtrW(reinterpret_cast<HWND>(dock->winId()),GWL_EXSTYLE)&WS_EX_TRANSPARENT)==0,
               "native Windows passthrough style is cleared");
 #endif
+}
+
+static QRect globalRect(QWidget *widget) {
+    return QRect(widget->mapToGlobal(QPoint()), widget->size());
+}
+
+static QRegion visibleToolRegion(QWidget *tool) {
+    if (!tool->isVisible()) return {};
+    const auto mask = tool->mask();
+    return (mask.isEmpty() ? QRegion(tool->rect()) : mask).translated(tool->mapToGlobal(QPoint()));
+}
+
+static void checkInputClipping(QDockWidget *dock, QScrollArea *scroll, QWidget *row, QWidget *controls,
+                               QLineEdit *input, QPushButton *send) {
+    auto *viewport = scroll->viewport();
+    auto *bar = scroll->verticalScrollBar();
+    auto correctlyClipped = [&] {
+        const auto visibleRow = QRegion(globalRect(row).intersected(globalRect(viewport)));
+        const auto controlFaces = QRegion(globalRect(input)).united(globalRect(send)).intersected(visibleRow);
+        const auto exposed = visibleToolRegion(controls);
+        return !controlFaces.isEmpty() && exposed == controlFaces;
+    };
+    dock->resize(420, 160);
+    settle();
+    scroll->ensureWidgetVisible(row, 0, 0);
+    settle();
+    const auto rowRect = globalRect(row);
+    const bool fullyAligned = globalRect(viewport).contains(rowRect) && correctlyClipped();
+    if (!fullyAligned) {
+        QString values;
+        {
+            QDebug out(&values);
+            out << "Initial locked input" << "row" << rowRect << "viewport" << globalRect(viewport)
+                << "controls" << globalRect(controls) << "exposed" << visibleToolRegion(controls)
+                << "controlFaces" << QRegion(globalRect(input)).united(globalRect(send))
+                << "mask" << controls->mask() << "scroll" << bar->value() << "/" << bar->maximum();
+        }
+        std::cerr << values.toStdString() << '\n';
+    }
+    check(fullyAligned,
+          "the locked input surface fits its row and exposes the editor and send button");
+    dock->move(dock->pos() + QPoint(21, 13));
+    settle();
+    check(globalRect(row).topLeft() != rowRect.topLeft() &&
+          correctlyClipped(),
+          "moving the locked interaction dock moves its input surface with the row");
+    const int half = row->height() / 2;
+    const int contentY = bar->value() + row->mapTo(viewport, QPoint()).y();
+    bar->setValue(contentY + half - viewport->height());
+    settle();
+    const auto cropped = globalRect(row).intersected(globalRect(viewport));
+    check(cropped.height() > 0 && cropped.height() < row->height() && correctlyClipped(),
+          "a partially scrolled input surface is clipped to the visible viewport intersection");
+    bar->setValue(bar->minimum());
+    settle();
+    check(!globalRect(row).intersects(globalRect(viewport)) && !controls->isVisible(),
+          "scrolling the entire input row out of view leaves no floating input surface");
+    scroll->ensureWidgetVisible(row, 0, 0);
+    settle();
+    check(globalRect(viewport).contains(globalRect(row)) && correctlyClipped(),
+          "scrolling the draft back into view restores the same input surface");
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == "windows" && controls->windowHandle()) {
+        const auto hwnd = reinterpret_cast<HWND>(controls->windowHandle()->winId());
+        check(IsWindow(hwnd) && !(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)),
+              "the native editor tool accepts clicks and activation independently of the transparent dock");
+        for (QWidget *control : {static_cast<QWidget *>(input), static_cast<QWidget *>(send)}) {
+            const auto pos = control->mapTo(controls, control->rect().center());
+            const auto ratio = controls->devicePixelRatioF();
+            POINT screenPoint{qRound(pos.x() * ratio), qRound(pos.y() * ratio)};
+            const bool mapped = ClientToScreen(hwnd, &screenPoint);
+            const auto hit = mapped ? WindowFromPoint(screenPoint) : nullptr;
+            check(hit && GetAncestor(hit, GA_ROOT) == hwnd,
+                  "native hit testing reaches the locked editor and send button");
+        }
+    }
+#endif
+}
+
+static void checkLockedDanmaku(RoomRealtime &service) {
+    QTemporaryDir settings;
+    QMainWindow host;
+    host.setCentralWidget(new QWidget);
+    auto shells = registerShells(host);
+    host.resize(900, 650);
+    host.show();
+    FloatingWindows windows(&service, settings.path(), &host, shells);
+    auto *dock = shells[0];
+    auto *lock = dock->findChild<QPushButton *>("interaction-lock");
+    auto *scroll = dock->findChild<QScrollArea *>();
+    auto *row = dock->findChild<QWidget *>("danmakuInputRow");
+    auto *controls = dock->findChild<QWidget *>("danmakuControls");
+    auto *input = dock->findChild<QLineEdit *>("danmakuInput");
+    auto *send = dock->findChild<QPushButton *>("danmakuSend");
+    check(lock && scroll && row && controls && input && send, "interaction exposes one real danmaku input row");
+    if (!lock || !scroll || !row || !controls || !input || !send) return;
+    auto checkSameControls = [&] {
+        int editors = 0, buttons = 0;
+        for (auto *widget : QApplication::allWidgets()) {
+            if (widget->objectName() == "danmakuInput") ++editors;
+            if (widget->objectName() == "danmakuSend") ++buttons;
+        }
+        check(editors == 1 && buttons == 1 && controls->parentWidget() == row &&
+              controls->findChild<QLineEdit *>("danmakuInput") == input &&
+              controls->findChild<QPushButton *>("danmakuSend") == send,
+              "lock transitions keep the original editor and button with no duplicates");
+    };
+    windows.floatWindow(0);
+    dock->move(32, 32);
+    dock->resize(420, 650);
+    settle();
+    checkSameControls();
+    check(!controls->isWindow() && input->isEnabled() && !send->isEnabled(), "empty draft starts in its normal inline editor");
+    input->setText(QStringLiteral("主播"));
+    lock->click();
+    settle();
+    checkSameControls();
+    check(windows.interactionLocked() && controls->isWindow() && controls->windowType() == Qt::Tool &&
+          !controls->windowFlags().testFlag(Qt::WindowDoesNotAcceptFocus) &&
+          !controls->windowFlags().testFlag(Qt::WindowTransparentForInput) && input->text() == QStringLiteral("主播"),
+          "locked interaction keeps a focusable input tool and its original draft");
+    checkInputClipping(dock, scroll, row, controls, input, send);
+    controls->activateWindow();
+    settle();
+    if (QApplication::platformName() == "minimal") {
+        QT_WARNING_PUSH
+        QT_WARNING_DISABLE_DEPRECATED
+        QApplication::setActiveWindow(controls);
+        QT_WARNING_POP
+    }
+    input->setFocus(Qt::TabFocusReason);
+    check(QApplication::focusWidget() == input, "the locked panel's real editor receives keyboard focus");
+    postedMessages.clear();
+    QInputMethodEvent composition("ni", {});
+    QApplication::sendEvent(input, &composition);
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(input, &enter);
+    check(postedMessages.isEmpty(), "IME candidate confirmation does not send the locked draft");
+    QInputMethodEvent commit;
+    commit.setCommitString(QStringLiteral("你好"));
+    QApplication::sendEvent(input, &commit);
+    QKeyEvent held(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier, QString(), true);
+    QApplication::sendEvent(input, &held);
+    const auto draft = QStringLiteral("主播你好");
+    check(input->text() == draft && postedMessages.isEmpty(), "committed IME text survives without auto-repeat posting it");
+    QApplication::sendEvent(input, &enter);
+    QApplication::sendEvent(input, &enter);
+    send->click();
+    check(postedMessages == QStringList{draft} && input->isReadOnly() && !send->isEnabled(),
+          "Return posts once and duplicate submits are blocked while awaiting its acknowledgement");
+    windows.unlockInteraction();
+    settle();
+    service.danmakuSendFinished(false, QStringLiteral("已禁言"));
+    check(!controls->isWindow() && input->text() == draft && !input->isReadOnly() && send->isEnabled(),
+          "an error received after unlocking keeps the same editable draft for retry");
+    lock->click();
+    settle();
+    checkSameControls();
+    send->click();
+    send->click();
+    check(postedMessages == QStringList{draft, draft}, "the locked send button posts one retry using the original editor");
+    service.danmakuSendFinished(true, QStringLiteral("已发送"));
+    check(input->text().isEmpty() && !send->isEnabled(), "only a confirmed send clears the locked draft");
+
+    input->setText(QStringLiteral("保留到重开"));
+    {
+        const QSignalBlocker block(dock);
+        dock->hide();
+    }
+    settle();
+    check(!windows.interactionLocked() && !controls->isVisible() && !controls->isWindow(),
+          "signal-blocked OBS menu hide removes the independent input tool and unlocks interaction");
+    {
+        const QSignalBlocker block(dock);
+        dock->show();
+    }
+    settle();
+    checkSameControls();
+    check(!windows.interactionLocked() && !controls->isWindow() && input->text() == QStringLiteral("保留到重开"),
+          "the OBS menu reopens an unlocked editor with the draft intact");
+    lock->click();
+    dock->close();
+    settle();
+    check(!controls->isVisible() && !controls->isWindow(), "closing a locked dock leaves no independent input tool");
+    windows.showWindow(0);
+    check(input->text() == QStringLiteral("保留到重开"), "explicit reopen also preserves the unsent draft");
+    send->click();
+    check(postedMessages == QStringList{draft, draft, QStringLiteral("保留到重开")},
+          "the reopened inline send button retains exactly one submission connection");
+    service.danmakuSendFinished(true, QStringLiteral("已发送"));
+    lock->click();
+    windows.dockWindow(0);
+    settle();
+    check(!controls->isWindow() && !windows.interactionLocked(), "redocking returns the input controls to the inline row");
+    windows.floatWindow(0);
+    lock->click();
+    windows.shutdown();
+    settle();
+    check(!controls->isVisible() && !controls->isWindow(), "shutdown removes the locked input tool");
+}
+
+static void checkSignedOutDanmaku() {
+    QTemporaryDir settings;
+    RoomRealtime service(nullptr);
+    FloatingWindows windows(&service, settings.path());
+    windows.showWindow(0);
+    auto *dock = windows.dockWidget(0);
+    auto *lock = dock->findChild<QPushButton *>("interaction-lock");
+    auto *input = dock->findChild<QLineEdit *>("danmakuInput");
+    auto *send = dock->findChild<QPushButton *>("danmakuSend");
+    if (lock) lock->click();
+    settle();
+    check(windows.interactionLocked() && input && send && !input->isEnabled() && !send->isEnabled(),
+          "locking an unauthenticated panel preserves the disabled editor and send button");
 }
 static void checkSettingsWheel(QWidget *panel) {
     auto *scroll = panel->findChild<QScrollArea *>();
@@ -268,6 +604,315 @@ static void checkGiftDock(QMainWindow &host, FloatingWindows &windows, RoomRealt
           interaction->isAncestorOf(history) && history->model() == model && rows() == reopened,
           "explicitly merging a closed gift dock makes its entire history visible in interaction");
 }
+static QImage paintHighlight(QListView *view, qint64 remainingMs) {
+    QStandardItemModel model(1, 1);
+    const auto index = model.index(0, 0);
+    if (remainingMs)
+        model.setData(index, QDeadlineTimer::current(Qt::PreciseTimer).deadline() + remainingMs,
+                      DisplayListModel::HighlightDeadlineRole);
+    QStyleOptionViewItem option;
+    option.initFrom(view);
+    option.rect = QRect(0, 0, 220, 32);
+    option.palette.setColor(QPalette::Base, QColor("#18222a"));
+    option.palette.setColor(QPalette::Highlight, QColor("#55c8fe"));
+    QImage image(option.rect.size(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(option.palette.color(QPalette::Base));
+    QPainter painter(&image);
+    view->itemDelegate()->paint(&painter, option, index);
+    return image;
+}
+
+static void checkDanmakuEmotes(LiveController &controller) {
+    QByteArray requests;
+    QTcpServer proxy;
+    check(proxy.listen(QHostAddress::LocalHost), "local emote request observer can listen");
+    if (!proxy.isListening()) return;
+    const auto previousProxy = QNetworkProxy::applicationProxy();
+    const auto restoreProxy = qScopeGuard([&] { QNetworkProxy::setApplicationProxy(previousProxy); });
+    QNetworkProxy::setApplicationProxy(QNetworkProxy(QNetworkProxy::HttpProxy, "127.0.0.1", proxy.serverPort()));
+    QObject::connect(&proxy, &QTcpServer::newConnection, &proxy, [&] {
+        while (auto *socket = proxy.nextPendingConnection()) {
+            auto reject = [&, socket] {
+                if (!socket->canReadLine()) return;
+                requests += socket->readLine();
+                socket->write("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                socket->disconnectFromHost();
+            };
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, reject);
+            reject();
+        }
+    });
+
+    QTemporaryDir dir;
+    QSettings settings(QDir(dir.path()).filePath("floating-windows.ini"), QSettings::IniFormat);
+    settings.setValue("avatars", false);
+    settings.sync();
+    RoomRealtime service(&controller);
+    FloatingWindows windows(&service, dir.path());
+    windows.showWindow(0);
+    auto *view = windows.panelWidget(0)->findChild<QListView *>("messageHistory");
+    check(view, "interaction exposes the danmaku list");
+    if (!view) return;
+    const QString first = QStringLiteral("[鼓掌]"), second = QStringLiteral("[干杯]");
+    const QString urlA = QStringLiteral("https://i0.hdslb.com/bfs/emote/a.png");
+    const QString urlB = QStringLiteral("https://i1.hdslb.com/bfs/emote/b.png");
+    const QString user = QStringLiteral("阿") + first;
+    const QString unknown = QStringLiteral("[普通括号]");
+    const QString body = QStringLiteral("😀") + first + second + first + QStringLiteral("   ") + unknown;
+    const QJsonObject definitions{{first, QJsonObject{{"url", urlA}, {"descript", first}}},
+                                  {second, QJsonObject{{"url", urlB}, {"descript", second}}}};
+    const QJsonObject extra{{"show_reply", true}, {"emots", definitions}};
+    QJsonArray meta;
+    for (int i = 0; i < 15; ++i) meta.append(0);
+    const QJsonObject base{{"face", "https://i2.hdslb.com/bfs/face/avatar.png"}};
+    meta.append(QJsonObject{{"extra", QString::fromUtf8(QJsonDocument(extra).toJson(QJsonDocument::Compact))},
+                            {"user", QJsonObject{{"base", base}}}});
+    service.events(QJsonArray{QJsonObject{{"cmd", "DANMU_MSG"}, {"info", QJsonArray{meta, body, QJsonArray{123, user}}}}});
+    settle();
+    const auto row = view->model()->index(0, 0);
+    const auto text = row.data().toString();
+    const auto spans = row.data(DisplayListModel::EmotesRole).value<QList<DanmakuEmote>>();
+    check(text == user + QStringLiteral("：回复： ") + body && spans.size() == 3,
+          "reply and username stay in display text alongside three inline emotes");
+    if (spans.size() != 3) return;
+    const qsizetype start = text.size() - body.size() + QStringLiteral("😀").size();
+    check(spans[0].start == start && spans[0].length == first.size() && spans[0].url == urlA &&
+          spans[1].start == start + first.size() && spans[1].length == second.size() && spans[1].url == urlB &&
+          spans[2].start == start + first.size() + second.size() && spans[2].length == first.size() &&
+          spans[2].url == urlA && !spans[0].standalone && !spans[1].standalone && !spans[2].standalone,
+          "emote spans skip the username token, reply prefix and surrogate pair and retain repetitions");
+    const auto missing = row.data(DisplayListModel::EmoteImagesRole).toMap();
+    const auto avatar = row.data(Qt::DecorationRole).value<QPixmap>();
+    for (int i = 0; i < 60 && !(requests.contains("i0.hdslb.com") && requests.contains("i1.hdslb.com")); ++i)
+        settle(25);
+    check(missing.isEmpty() && avatar.isNull() && requests.contains("i0.hdslb.com") && requests.contains("i1.hdslb.com") &&
+          !requests.contains("i2.hdslb.com"), "disabling avatars still fetches both emotes through the offline proxy");
+
+    QStandardItemModel fixture(1, 1);
+    const auto index = fixture.index(0, 0);
+    fixture.setData(index, text);
+    QStyleOptionViewItem option;
+    option.initFrom(view);
+    option.rect = QRect(0, 0, 620, 92);
+    option.palette.setColor(QPalette::Base, QColor("#181818"));
+    option.palette.setColor(QPalette::Text, QColor("#eeeeee"));
+    option.palette.setColor(QPalette::Highlight, QColor("#18ccfc"));
+    auto paint = [&](const QList<DanmakuEmote> &tokens, const QVariantMap &images) {
+        fixture.setData(index, QVariant::fromValue(tokens), DisplayListModel::EmotesRole);
+        fixture.setData(index, images, DisplayListModel::EmoteImagesRole);
+        QImage image(option.rect.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(option.palette.color(QPalette::Base));
+        QPainter painter(&image);
+        view->itemDelegate()->paint(&painter, option, index);
+        return image;
+    };
+    auto paintNeutralTheme = [&](const QList<DanmakuEmote> &tokens, const QVariantMap &images) {
+        const QColor highlight = option.palette.color(QPalette::Highlight);
+        option.palette.setColor(QPalette::Highlight, option.palette.color(QPalette::Base));
+        const QImage image = paint(tokens, images);
+        option.palette.setColor(QPalette::Highlight, highlight);
+        return image;
+    };
+    const auto plain = paint({}, {});
+    const auto pending = paint(spans, {});
+    const auto neutralPending = paintNeutralTheme(spans, {});
+    auto accent = [](QRgb pixel) {
+        return qBlue(pixel) >= qGreen(pixel) ? qMax(0, qGreen(pixel) - qRed(pixel)) : 0;
+    };
+    auto accentBounds = [&](const QImage &image, const QImage &reference) {
+        QRect result;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x) {
+                const QRgb pixel = image.pixel(x, y);
+                if (accent(pixel) > 3 && pixel != reference.pixel(x, y))
+                    result |= QRect(x, y, 1, 1);
+            }
+        return result;
+    };
+    const auto pendingArea = accentBounds(pending, neutralPending);
+    const DanmakuEmote fakeSpan{int(text.indexOf(unknown)), int(unknown.size()), urlA, false};
+    // Mark the unknown token only in this reference to locate its glyphs at the current font and DPI.
+    const auto fakeArea = accentBounds(paint({fakeSpan}, {}), paintNeutralTheme({fakeSpan}, {}));
+    check(plain == paintNeutralTheme({}, {}) && !pendingArea.isEmpty() && !fakeArea.isEmpty() &&
+          pendingArea.right() < fakeArea.left(),
+          "pending emote styling is confined to recognized spans and skips ordinary bracketed text");
+    int strongest = 0;
+    for (int y = pendingArea.top(); y <= pendingArea.bottom(); ++y)
+        for (int x = pendingArea.left(); x <= pendingArea.right(); ++x)
+            if (pending.pixel(x, y) != neutralPending.pixel(x, y))
+                strongest = qMax(strongest, accent(pending.pixel(x, y)));
+    int fillRows = 0, strongUpperPixels = 0, underlinePixels = 0, unchangedInk = 0;
+    for (int y = pendingArea.top(); y <= pendingArea.bottom(); ++y) {
+        int fillPixels = 0;
+        for (int x = pendingArea.left(); x <= pendingArea.right(); ++x) {
+            const auto pixel = pending.pixel(x, y);
+            const auto strength = pixel == neutralPending.pixel(x, y) ? 0 : accent(pixel);
+            if (strength > 3 && strength < strongest * 2 / 3) ++fillPixels;
+            if (strength > 3 && strength >= strongest * 2 / 3) {
+                if (y >= pendingArea.center().y()) ++underlinePixels;
+                else ++strongUpperPixels;
+            }
+            if (qRed(pixel) > 200 && qRed(plain.pixel(x, y)) > 200) ++unchangedInk;
+        }
+        if (fillPixels > 3) ++fillRows;
+    }
+    check(fillRows >= 2 && strongUpperPixels == 0 && underlinePixels >= 2 && unchangedInk > 0,
+          "pending tokens keep their original glyphs with a soft theme background and a stronger underline");
+    QPixmap red(22, 20), green(22, 20);
+    red.fill(QColor("#d82261"));
+    green.fill(QColor("#24ca5a"));
+    const QVariantMap one{{urlA, red}};
+    const auto mixed = paint(spans, one);
+    const auto unmarkedMiddle = paint({spans[0], spans[2]}, one);
+    const auto middleArea = accentBounds(mixed, unmarkedMiddle);
+    check(!middleArea.isEmpty() && middleArea.width() < pendingArea.width(),
+          "in a mixed row the uncached middle token alone retains its pending decoration");
+    const auto rendered = paint(spans, {{urlA, red}, {urlB, green}});
+    check(rendered == paintNeutralTheme(spans, {{urlA, red}, {urlB, green}}),
+          "decoded emotes no longer show the pending decoration");
+    QList<QRgb> runs;
+    QRgb previous = 0;
+    for (int x = 0; x < rendered.width(); ++x) {
+        QRgb color = 0;
+        for (int y = 0; y < rendered.height(); ++y) {
+            const QRgb pixel = rendered.pixel(x, y);
+            if (pixel == qRgb(216, 34, 97) || pixel == qRgb(36, 202, 90)) { color = pixel; break; }
+        }
+        if (color && color != previous) runs.append(color);
+        previous = color;
+    }
+    check(runs == QList<QRgb>{qRgb(216, 34, 97), qRgb(36, 202, 90), qRgb(216, 34, 97)},
+          "the production delegate paints both inline images and the repeated first image in order");
+
+    fixture.setData(index, first);
+    auto single = spans[0];
+    single.start = 0;
+    const auto inlineImage = paint({single}, one);
+    const auto inlineHeight = view->itemDelegate()->sizeHint(option, index).height();
+    single.standalone = true;
+    const auto standaloneImage = paint({single}, one);
+    const auto standaloneHeight = view->itemDelegate()->sizeHint(option, index).height();
+    auto colorRows = [](const QImage &image) {
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            const auto *pixels = reinterpret_cast<const QRgb *>(image.constScanLine(y));
+            if (std::find(pixels, pixels + image.width(), qRgb(216, 34, 97)) != pixels + image.width())
+                ++count;
+        }
+        return count;
+    };
+    check(colorRows(standaloneImage) > colorRows(inlineImage) && standaloneHeight > inlineHeight &&
+          standaloneHeight >= colorRows(standaloneImage), "standalone emotes paint larger and reserve their own row height");
+}
+
+static void checkLiveHighlights(LiveController &controller) {
+    QTemporaryDir dir;
+    RoomRealtime service(&controller);
+    FloatingWindows windows(&service, dir.path());
+    windows.showWindow(0);
+    auto *panel = windows.panelWidget(0);
+    auto *messages = panel->findChild<QListView *>("messageHistory");
+    auto *activity = panel->findChild<QListView *>("antiHistory");
+    auto *gifts = panel->findChild<QListView *>("giftHistory");
+    auto *openEntries = panel->findChild<QPushButton *>("show-entry-history");
+    check(messages && activity && gifts && openEntries, "interaction exposes the views used for live highlights");
+    if (!messages || !activity || !gifts || !openEntries) return;
+
+    const auto idle = paintHighlight(messages, 0);
+    const auto early = paintHighlight(messages, 1100);
+    const auto middle = paintHighlight(messages, 480);
+    auto difference = [&idle](const QImage &image, int x) {
+        const auto a = image.pixelColor(x, 16);
+        const auto b = idle.pixelColor(x, 16);
+        return qAbs(a.red() - b.red()) + qAbs(a.green() - b.green()) + qAbs(a.blue() - b.blue());
+    };
+    check(difference(early, 12) > difference(middle, 12) && difference(middle, 12) > 0 &&
+          difference(early, 12) > difference(early, 205) && paintHighlight(messages, -50) == idle,
+          "row background weakens across its width and fades completely by its deadline");
+
+    auto deadline = [](QListView *view, int row) {
+        return view->model()->index(row, 0).data(DisplayListModel::HighlightDeadlineRole).toLongLong();
+    };
+    auto interaction = [](int type, const QString &id) {
+        return QJsonObject{{"cmd", "INTERACT_WORD"}, {"data", QJsonObject{{"msg_type", type}, {"tid", id}, {"uname", "viewer"}}}};
+    };
+    const QJsonObject chat{{"cmd", "DANMU_MSG:4:0:2:2:2:0"},
+                           {"info", QJsonArray{QJsonArray{}, "hello", QJsonArray{12, "viewer"}}}};
+    const auto entry = interaction(1, "entry-once");
+    const auto arrival = QDeadlineTimer::current(Qt::PreciseTimer).deadline();
+    service.events({chat, entry, interaction(2, "follow"), interaction(3, "share"),
+                    QJsonObject{{"cmd", "LIKE_INFO_V3_CLICK"}, {"data", QJsonObject{{"uname", "viewer"}}}},
+                    QJsonObject{{"cmd", "SEND_GIFT"}, {"data", QJsonObject{{"giftName", "gift"}, {"num", 1}}}}});
+    settle();
+    const auto firstChat = deadline(messages, 0), firstEntry = deadline(activity, 0);
+    check(messages->model()->rowCount() == 1 && activity->model()->rowCount() == 4 &&
+          firstChat > arrival && firstEntry > arrival, "live danmaku and room entry get highlight deadlines");
+    check(!deadline(activity, 1) && !deadline(activity, 2) && !deadline(activity, 3) &&
+          gifts->model()->rowCount() == 1 && !deadline(gifts, 0), "follows, shares, likes and gifts stay unhighlighted");
+
+    class PaintCounter final : public QObject {
+      public:
+        int paints = 0;
+        bool eventFilter(QObject *, QEvent *e) override {
+            if (e->type() == QEvent::Paint) ++paints;
+            return false;
+        }
+    } frames;
+    messages->viewport()->installEventFilter(&frames);
+    settle(210);
+    check(frames.paints >= 2, "visible danmaku animates without another service event");
+    messages->viewport()->removeEventFilter(&frames);
+
+    service.events({entry, chat}); // Redelivered entry ID, plus another identical-looking, ID-less chat.
+    settle();
+    windows.showWindow(0);
+    check(messages->model()->rowCount() == 2 && deadline(messages, 0) == firstChat &&
+          deadline(messages, 1) > firstChat, "identical new chat gets its own deadline without restarting older chat");
+    check(activity->model()->rowCount() == 4 && deadline(activity, 0) == firstEntry,
+          "a replayed entry ID and a presentation rebuild keep the original entry deadline");
+
+    openEntries->click();
+    auto *dialog = panel->findChild<QDialog *>("entry-history-dialog");
+    auto *history = dialog ? dialog->findChild<QListView *>("entry-history-list") : nullptr;
+    check(history && history->model()->rowCount() == fixtureEntries.size(), "entry history opens with its initial snapshot");
+    if (!history) return;
+    const auto oldCount = static_cast<int>(fixtureEntries.size());
+    check(!deadline(history, oldCount - 1), "opening entry history leaves its existing rows unhighlighted");
+    const auto previousEntries = fixtureEntries;
+    fixtureEntries.append({QStringLiteral("新增观众"), 1700000100, "test-new-entry", fixtureEntries.last().sequence + 1});
+    emit service.entryHistoryChanged();
+    settle(280);
+    const auto historyDeadline = deadline(history, oldCount);
+    check(history->model()->rowCount() == oldCount + 1 && historyDeadline > firstEntry &&
+          !deadline(history, oldCount - 1), "new entry in an open history is highlighted separately from the snapshot");
+    emit service.entryHistoryChanged();
+    settle(280);
+    check(deadline(history, oldCount) == historyDeadline, "refreshing an unchanged entry history preserves its deadline");
+    dialog->close();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    openEntries->click();
+    auto *reopened = panel->findChild<QListView *>("entry-history-list");
+    check(reopened && reopened->model()->rowCount() == oldCount + 1 && !deadline(reopened, oldCount),
+          "reopening entry history treats the recently appended entry as existing history");
+    fixtureEntries = previousEntries;
+
+    const auto newest = deadline(messages, 1);
+    windows.dockWidget(0)->hide();
+    service.events({chat, interaction(1, "while-hidden")});
+    windows.showWindow(0);
+    check(messages->model()->rowCount() == 3 && activity->model()->rowCount() == 5 &&
+          !deadline(messages, 2) && !deadline(activity, 4),
+          "chat and entry received while interaction is closed appear as history without a flash");
+    windows.dockWidget(0)->hide();
+    settle(qMax(0, static_cast<int>(newest - QDeadlineTimer::current(Qt::PreciseTimer).deadline())) + 100);
+    windows.showWindow(0);
+    const auto now = QDeadlineTimer::current(Qt::PreciseTimer).deadline();
+    check(messages->model()->rowCount() == 3 && deadline(messages, 0) <= now && deadline(messages, 1) <= now &&
+          deadline(activity, 0) <= now, "reopening interaction cannot restart expired rows");
+    service.contextChanged();
+    check(!messages->model()->rowCount() && !activity->model()->rowCount(), "changing rooms clears highlighted interaction rows");
+}
+
 int main(int argc, char **argv) {
     const bool screenshots = !qEnvironmentVariable("LIVEHIME_UI_SCREENSHOTS").isEmpty();
     const bool interactiveDemo = qEnvironmentVariableIntValue("LIVEHIME_UI_DEMO") != 0;
@@ -304,6 +949,11 @@ int main(int argc, char **argv) {
     QTemporaryDir dir;
     LiveController controller(dir.path());
     RoomRealtime service(&controller);
+    checkDockFocus(service);
+    checkLiveHighlights(controller);
+    checkDanmakuEmotes(controller);
+    checkLockedDanmaku(service);
+    checkSignedOutDanmaku();
     {
         QMainWindow host;
         host.show();
@@ -422,25 +1072,6 @@ int main(int argc, char **argv) {
         const auto hostFlags=host.windowFlags();
         auto registered=registerShells(host);
         FloatingWindows windows(&service,dir.path(),&host,registered);
-        auto *input = windows.panelWidget(0)->findChild<QLineEdit *>("danmakuInput");
-        auto *send = windows.panelWidget(0)->findChild<QPushButton *>("danmakuSend");
-        check(input && send && !send->isEnabled(), "empty chat draft cannot send");
-        if (input && send) {
-            input->setText(QStringLiteral("主播你好"));
-            QInputMethodEvent preedit(QStringLiteral("ni"), {});
-            QApplication::sendEvent(input, &preedit);
-            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
-            QApplication::sendEvent(input, &enter);
-            check(postedText.isEmpty(), "IME candidate confirmation does not post");
-            QInputMethodEvent finish;
-            QApplication::sendEvent(input, &finish);
-            QApplication::sendEvent(input, &enter);
-            check(postedText == input->text(), "Return posts committed chat text");
-            service.danmakuSendFinished(false, QStringLiteral("已禁言"));
-            check(!input->text().isEmpty(), "server rejection preserves the draft");
-            service.danmakuSendFinished(true, QStringLiteral("已发送"));
-            check(input->text().isEmpty() && !send->isEnabled(), "confirmed send clears the draft");
-        }
         const char *expectedIds[]={"livehime-obs-interaction","livehime-obs-audience","livehime-obs-guard","livehime-obs-gifts"};
         for(int k=0;k<FloatingWindows::DockCount;++k){
             check(QString::fromLatin1(FloatingWindows::dockId(k))==QString::fromLatin1(expectedIds[k]),"dock restore ID remains stable");
@@ -575,6 +1206,7 @@ int main(int argc, char **argv) {
             check(registered[k]->isVisible()==visible[k],"content injection preserves restored visibility");
             check(host.dockWidgetArea(registered[k])==areas[k],"content injection preserves restored dock area");
             if(floating[k]){
+                checkIndependentFloat(registered[k], host);
                 const auto minimum=registered[k]->minimumSizeHint();
                 // qminimal's 240px virtual display can restore an empty shell narrower
                 // than the real panel's 280px minimum; allow that necessary expansion.

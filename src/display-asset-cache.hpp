@@ -1,6 +1,8 @@
 #pragma once
 #include <QCache>
+#include <QDeadlineTimer>
 #include <QNetworkAccessManager>
+#include <QPair>
 #include <QPixmap>
 #include <QQueue>
 #include <QSet>
@@ -11,15 +13,23 @@ class DisplayAssetCache final : public QObject {
   public:
     explicit DisplayAssetCache(QObject *parent = nullptr);
     QPixmap get(const QString &url);
+    static QString emoteUrl(const QString &url);
+    QPixmap cachedEmote(const QString &normalizedUrl) const;
+    QPixmap emote(const QString &normalizedUrl);
   signals:
     void ready();
+    void emoteReady(const QString &normalizedUrl);
 
   private:
+    enum class Usage { Avatar, Emote };
+    using Key = QPair<QString, Usage>;
+    QPixmap requestPreview(const QString &url, Usage usage);
     void pump();
-    QNetworkAccessManager network_;
-    QCache<QString, QPixmap> cache_{16384}; // KiB; at most 16 MiB decoded pixels
-    QQueue<QString> pending_;
-    QSet<QString> known_;
+    QCache<QString, QPixmap> avatars_{16384}, emotes_{8192}; // decoded KiB
+    QCache<Key, QDeadlineTimer> failures_{256};
+    QQueue<Key> pending_;
+    QSet<Key> requested_;
     int active_ = 0;
+    QNetworkAccessManager network_;
 };
 } // namespace livehime

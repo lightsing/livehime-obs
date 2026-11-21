@@ -25,7 +25,7 @@
       </nav>
       <div class="nav-actions">
         <a class="btn btn-ghost" href="https://github.com/lightsing/livehime-obs" target="_blank" rel="noopener">GitHub</a>
-        <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/tag/v0.4.1" target="_blank" rel="noopener">v0.4.1 发布页</a>
+        <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/tag/v0.4.2" target="_blank" rel="noopener">v0.4.2 发布页</a>
         <button class="nav-toggle" id="navToggle" type="button" aria-label="展开导航">菜单</button>
       </div>
     </div>
@@ -87,7 +87,7 @@
             <ul>
               <li>分区列表、封面预览图和观众远程头像经无 Cookie 的限流匿名通道请求，不向图片 CDN 发送账号 Cookie 或设备标识。</li>
               <li>匿名/神秘人身份（含嵌套 <code>uinfo/user_info</code> 与 <code>is_mystery</code> 字段）在展示前统一脱敏为「神秘用户」。</li>
-              <li>互动面板锁定穿透（<code>WS_EX_TRANSPARENT</code>）仅在浮动状态下启用，停靠、隐藏、关闭或重启都会自动清除，绝不污染 OBS 主窗口标志。</li>
+              <li>互动浮窗使用 <code>WS_EX_TRANSPARENT</code> 穿透鼠标点击。输入框和发送按钮放在按可见区域裁剪的独立窗口内。停靠、隐藏、关闭或重启后恢复正常输入。</li>
               <li>日志与测试脱敏输出不打印 Cookie、请求体或推流密钥。</li>
             </ul>
           </div>
@@ -180,7 +180,7 @@ Set-Location livehime-obs
               </div>
               <pre id="techTestSnippet">.\scripts\build.ps1 -DependenciesRoot D:\path\to\deps -SkipBootstrap
 ctest --test-dir build -C RelWithDebInfo --output-on-failure
-.\scripts\test-installer.ps1 -InstallerPath dist\livehime-obs-0.4.1-windows-x64-setup.exe</pre>
+.\scripts\test-installer.ps1 -InstallerPath dist\livehime-obs-0.4.2-windows-x64-setup.exe</pre>
             </div>
           </div>
         </div>
@@ -192,11 +192,11 @@ ctest --test-dir build -C RelWithDebInfo --output-on-failure
         <div class="section-header">
           <span class="section-tag">Verification</span>
           <h2>自动化验证覆盖范围</h2>
-          <p>GitHub Actions（<code>.github/workflows/windows.yml</code>）在每次推送与发布 Tag 时执行完整构建、14 项 CTest 测试、DLL 加载核验与安装器矩阵测试。</p>
+          <p>GitHub Actions（<code>.github/workflows/windows.yml</code>）在每次推送与发布 Tag 时执行完整构建、15 项 CTest 测试、DLL 加载核验与安装器矩阵测试。</p>
         </div>
         <div class="notice-box">
           <div class="info-panel">
-            <h3>离线 CTest 套件（14 项）</h3>
+            <h3>离线 CTest 套件（15 项）</h3>
             <ul>
               <li><code>protocol-vectors</code>：转义排序签名向量、<code>client_traceid</code>、Cookie 范围与 RTMP 选择。</li>
               <li><code>session-store-roundtrip</code>：当前用户 DPAPI 加解密、损坏缓存拒绝与设备标识持久性。</li>
@@ -204,6 +204,7 @@ ctest --test-dir build -C RelWithDebInfo --output-on-failure
               <li><code>ui-crop-smoke</code> &amp; <code>native-stream-controls</code>：4:3 裁切、双下拉搜索、原生按钮及延迟推流信号接管。</li>
               <li><code>goim-codec-and-tcp</code>、<code>gift-v2-wire-parser</code>、<code>realtime-state-isolation</code> &amp; <code>realtime-floating-windows</code>：TCP 分帧解压、Protobuf V2、停靠/穿透与超管弹窗。</li>
               <li>自动更新测试覆盖 npm 签名、下载与缓存、更新偏好，以及所有 OBS 实例退出后再安装。</li>
+              <li><code>danmaku-emotes</code> 检查独立和混排表情、重复标签以及缺失或无效的图片地址。</li>
             </ul>
           </div>
           <div class="info-panel warn">

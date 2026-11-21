@@ -2,77 +2,160 @@
 #include <QBuffer>
 #include <QImageReader>
 #include <QNetworkReply>
+#include <QTimer>
 #include <memory>
+#include <utility>
+
 namespace livehime {
+namespace {
+bool cdnHost(const QString &host) {
+    return host.endsWith(".hdslb.com") || host.endsWith(".bilivideo.com");
+}
+
+QPixmap decodePreview(QByteArray &bytes, const QByteArray &mime, bool emote) {
+    QByteArray format;
+    if (mime == "image/png") format = "png";
+    else if (mime == "image/jpeg") format = "jpeg";
+    else if (mime == "image/webp") format = "webp";
+    else if (emote && mime == "image/gif") format = "gif";
+    else return {};
+
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::ReadOnly);
+    QImageReader reader(&buffer, format);
+    reader.setAutoDetectImageFormat(false);
+    const auto size = reader.size();
+    const int maxSide = emote ? 2048 : 1024;
+    if (size.isEmpty() || size.width() > maxSide || size.height() > maxSide)
+        return {};
+    const QSize bounds = emote ? QSize(160, 96) : QSize(32, 32);
+    const auto target = emote && size.boundedTo(bounds) == size ? size
+        : size.scaled(bounds, Qt::KeepAspectRatio).expandedTo(QSize(1, 1));
+    auto image = reader.read(); // The first frame is the preview for animated GIF/WebP.
+    if (!image.isNull() && image.size() != target)
+        image = image.scaled(target, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    return QPixmap::fromImage(std::move(image));
+}
+} // namespace
+
 DisplayAssetCache::DisplayAssetCache(QObject *p) : QObject(p) {}
 QPixmap DisplayAssetCache::get(const QString &url) {
-    if (auto p = cache_.object(url))
+    if (auto p = avatars_.object(url))
         return *p;
     QUrl u(url);
-    const auto host = u.host().toLower();
-    const bool cdn = host.endsWith(".hdslb.com") || host.endsWith(".bilivideo.com");
     if (u.scheme() != "https" || !u.userInfo().isEmpty() || !u.fragment().isEmpty() || u.port() != -1 ||
-        !cdn || url.size() > 2048)
+        !cdnHost(u.host()) || url.size() > 2048)
         return {};
-    if (!known_.contains(url) && pending_.size() < 128 && known_.size() < 2048) {
-        known_.insert(url);
-        pending_.enqueue(url);
+    return requestPreview(url, Usage::Avatar);
+}
+
+QString DisplayAssetCache::emoteUrl(const QString &url) {
+    if (url.isEmpty() || url.size() > 2048)
+        return {};
+    for (const QChar ch : url)
+        if (ch.unicode() <= 0x20 || ch.unicode() == 0x7f || ch == QLatin1Char('\\'))
+            return {};
+    QUrl parsed(url.startsWith("//") ? QStringLiteral("https:") + url : url, QUrl::StrictMode);
+    if (!parsed.isValid() || !cdnHost(parsed.host()) || parsed.path().isEmpty() || parsed.hasFragment() ||
+        parsed.authority(QUrl::FullyEncoded).contains('@'))
+        return {};
+    const bool http = parsed.scheme() == "http";
+    const int defaultPort = http ? 80 : 443;
+    if ((!http && parsed.scheme() != "https") || parsed.port(defaultPort) != defaultPort)
+        return {};
+    parsed.setScheme(QStringLiteral("https"));
+    parsed.setPort(-1);
+    const auto normalized = parsed.toString(QUrl::FullyEncoded);
+    return normalized.size() <= 2048 ? normalized : QString{};
+}
+
+QPixmap DisplayAssetCache::emote(const QString &normalizedUrl) {
+    if (const auto cached = cachedEmote(normalizedUrl); !cached.isNull())
+        return cached;
+    const auto url = emoteUrl(normalizedUrl);
+    if (url.isEmpty())
+        return {};
+    if (url != normalizedUrl) {
+        if (auto p = emotes_.object(url))
+            return *p;
+    }
+    return requestPreview(url, Usage::Emote);
+}
+
+QPixmap DisplayAssetCache::cachedEmote(const QString &normalizedUrl) const {
+    const auto *pixmap = emotes_.object(normalizedUrl);
+    return pixmap ? *pixmap : QPixmap{};
+}
+
+QPixmap DisplayAssetCache::requestPreview(const QString &url, Usage usage) {
+    const Key key{url, usage};
+    if (auto *until = failures_.object(key)) {
+        if (!until->hasExpired())
+            return {};
+        failures_.remove(key);
+    }
+    if (!requested_.contains(key) && pending_.size() < 128) {
+        requested_.insert(key);
+        pending_.enqueue(key);
         pump();
     }
     return {};
 }
 void DisplayAssetCache::pump() {
     while (active_ < 2 && !pending_.isEmpty()) {
-        auto url = pending_.dequeue();
-        QNetworkRequest request{QUrl(url)};
+        const auto key = pending_.dequeue();
+        const bool emote = key.second == Usage::Emote;
+        const qint64 limit = emote ? 4 * 1024 * 1024 : 1024 * 1024;
+        QNetworkRequest request{QUrl(key.first)};
         request.setAttribute(QNetworkRequest::AuthenticationReuseAttribute, QNetworkRequest::Manual);
         request.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
         request.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
         request.setTransferTimeout(8000);
         auto reply = network_.get(request);
-        reply->setReadBufferSize(1024 * 1024 + 1);
+        reply->setReadBufferSize(limit + 1);
+        QTimer::singleShot(15000, reply, [reply] { if (reply->isRunning()) reply->abort(); });
         ++active_;
         auto bytes = std::make_shared<QByteArray>();
-        connect(reply, &QIODevice::readyRead, this, [reply, bytes] {
-            bytes->append(reply->readAll());
-            if (bytes->size() > 1024 * 1024)
+        auto readAvailable = [reply, bytes, limit] {
+            const auto count = qMin<qint64>(reply->bytesAvailable(), limit + 1 - bytes->size());
+            if (count > 0)
+                bytes->append(reply->read(count));
+        };
+        connect(reply, &QIODevice::readyRead, this, [reply, bytes, limit, readAvailable] {
+            readAvailable();
+            if (bytes->size() > limit)
                 reply->abort();
         });
-        connect(reply, &QNetworkReply::metaDataChanged, this, [reply] {
-            if (reply->header(QNetworkRequest::ContentLengthHeader).toLongLong() > 1024 * 1024)
+        connect(reply, &QNetworkReply::metaDataChanged, this, [reply, limit] {
+            if (reply->header(QNetworkRequest::ContentLengthHeader).toLongLong() > limit)
                 reply->abort();
         });
-        connect(reply, &QNetworkReply::finished, this, [this, reply, bytes, url] {
-            bytes->append(reply->readAll());
-            const auto contentType = reply->header(QNetworkRequest::ContentTypeHeader)
-                                         .toString()
-                                         .section(';', 0, 0)
-                                         .trimmed()
-                                         .toLower();
-            const bool imageType =
-                contentType == "image/png" || contentType == "image/jpeg" || contentType == "image/webp";
+        connect(reply, &QNetworkReply::finished, this, [this, reply, bytes, limit, key, emote, readAvailable] {
+            readAvailable();
+            QPixmap preview;
             if (reply->error() == QNetworkReply::NoError &&
-                reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200 && imageType &&
-                bytes->size() <= 1024 * 1024) {
-                QBuffer buffer(bytes.get());
-                buffer.open(QIODevice::ReadOnly);
-                QImageReader reader(&buffer);
-                auto size = reader.size();
-                if (size.isValid() && size.width() <= 1024 && size.height() <= 1024) {
-                    auto image = reader.read();
-                    if (!image.isNull()) {
-                        auto pixmap = QPixmap::fromImage(
-                            image.scaled(32, 32, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-                        cache_.insert(url, new QPixmap(pixmap),
-                                      qMax(1, int(pixmap.width() * pixmap.height() * 4 / 1024)));
-                        emit ready();
-                    }
-                }
+                reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200 && bytes->size() <= limit) {
+                const auto mime = reply->rawHeader("Content-Type").split(';').value(0).trimmed().toLower();
+                preview = decodePreview(*bytes, mime, emote);
             }
+            if (preview.isNull()) {
+                failures_.insert(key, new QDeadlineTimer(30000));
+            } else {
+                auto &cache = emote ? emotes_ : avatars_;
+                const auto cost = (preview.width() * preview.height() * 4 + 1023) / 1024;
+                cache.insert(key.first, new QPixmap(preview), cost);
+            }
+            requested_.remove(key);
             reply->deleteLater();
             --active_;
             pump();
+            if (!preview.isNull()) {
+                if (emote)
+                    emit emoteReady(key.first);
+                else
+                    emit ready();
+            }
         });
     }
 }

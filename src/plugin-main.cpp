@@ -1,3 +1,4 @@
+#include "dock-focus.hpp"
 #include "floating-windows.hpp"
 #include "moderation-alerts.hpp"
 #include "protocol.hpp"
@@ -10,6 +11,7 @@
 #include <QDockWidget>
 #include <QFileInfo>
 #include <QLabel>
+#include <QMainWindow>
 #include <QPointer>
 #include <QSettings>
 #include <QStandardPaths>
@@ -109,6 +111,8 @@ void obs_module_post_load(void) {
         delete dockContainer.data();
         return;
     }
+    livehime::installDockFocusPolicy(qobject_cast<QDockWidget *>(dockContainer->parentWidget()),
+                                     qobject_cast<QMainWindow *>(window));
     // Register native OBS-owned shells before OBS restores QMainWindow::DockState.
     // Their data services and output-dependent controls are still deferred.
     char *configPath = obs_module_config_path("");

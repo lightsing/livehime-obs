@@ -1,6 +1,7 @@
 #pragma once
 #include "live-controller.hpp"
 #include "moderation-notice.hpp"
+#include <QDeadlineTimer>
 #include <QJsonArray>
 #include <QNetworkReply>
 #include <QPointer>
@@ -14,6 +15,7 @@ struct RoomEntry {
     qint64 timestamp = 0;
     QString messageId;
     qint64 sequence = 0;
+    qint64 receivedAtMs = QDeadlineTimer::current(Qt::PreciseTimer).deadline();
 };
 // One account/room context shared by all windows. Never controls OBS output.
 class RoomRealtime final : public QObject {

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(livehime-obs VERSION 0.4.1 LANGUAGES C CXX)
+project(livehime-obs VERSION 0.4.2 LANGUAGES C CXX)
 
 include(cmake/ObsSdk.cmake)
 set(CMAKE_CXX_STANDARD 20)
@@ -197,7 +197,10 @@ if(BUILD_TESTING)
   target_compile_options(realtime-state-test PRIVATE /W4 /permissive- /utf-8 /EHsc)
   add_test(NAME realtime-state-isolation COMMAND realtime-state-test)
   set_tests_properties(realtime-state-isolation PROPERTIES TIMEOUT 30 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit")
-  add_executable(realtime-ui-test tests/realtime-ui-test.cpp src/floating-windows.cpp src/floating-windows.hpp src/display-asset-cache.cpp src/display-asset-cache.hpp src/room-realtime.hpp src/live-controller.hpp
+  add_executable(realtime-ui-test tests/realtime-ui-test.cpp src/floating-windows.cpp src/floating-windows.hpp
+    src/danmaku-emotes.cpp src/danmaku-emotes.hpp
+    src/danmaku-input-row.cpp src/danmaku-input-row.hpp
+    src/dock-focus.cpp src/dock-focus.hpp src/display-asset-cache.cpp src/display-asset-cache.hpp src/room-realtime.hpp src/live-controller.hpp
     src/moderation-alerts.cpp src/moderation-alerts.hpp)
   target_include_directories(realtime-ui-test PRIVATE src)
   target_include_directories(realtime-ui-test SYSTEM PRIVATE "${OBS_SOURCE_ROOT}/libobs" "${OBS_SOURCE_ROOT}/frontend/api" "${OBS_SDK_ROOT}/include")
@@ -207,6 +210,14 @@ if(BUILD_TESTING)
   add_test(NAME realtime-floating-windows COMMAND realtime-ui-test)
   set_tests_properties(realtime-floating-windows PROPERTIES TIMEOUT 45 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit"
     ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QPA_PLATFORM_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins/platforms;QT_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins")
+  add_executable(danmaku-emotes-test tests/danmaku-emotes-test.cpp src/danmaku-emotes.cpp src/danmaku-emotes.hpp
+    src/display-asset-cache.cpp src/display-asset-cache.hpp)
+  target_include_directories(danmaku-emotes-test PRIVATE src)
+  target_link_libraries(danmaku-emotes-test PRIVATE Qt6::Core Qt6::Gui Qt6::Network)
+  target_compile_definitions(danmaku-emotes-test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(danmaku-emotes-test PRIVATE /W4 /permissive- /utf-8 /EHsc)
+  add_test(NAME danmaku-emotes COMMAND danmaku-emotes-test)
+  set_tests_properties(danmaku-emotes PROPERTIES TIMEOUT 15 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit")
   add_executable(gift-v2-test tests/gift-v2-test.cpp src/gift-v2.cpp src/gift-v2.hpp)
   target_include_directories(gift-v2-test PRIVATE src)
   target_link_libraries(gift-v2-test PRIVATE Qt6::Core)

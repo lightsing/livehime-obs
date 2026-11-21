@@ -1,4 +1,5 @@
 #pragma once
+#include "danmaku-emotes.hpp"
 #include <QAbstractListModel>
 #include <QJsonObject>
 #include <QWidget>
@@ -10,21 +11,29 @@ class QDockWidget;
 namespace livehime {
 class RoomRealtime;
 class DisplayAssetCache;
-// Plain-text presentation records: no HTML interpretation or remote resource fetching.
+// Text stays available for tooltips and as a fallback while an emote is loading.
 class DisplayListModel final : public QAbstractListModel {
   public:
+    enum { HighlightDeadlineRole = Qt::UserRole + 1, EmotesRole, EmoteImagesRole };
     explicit DisplayListModel(int limit, QObject *parent = nullptr);
     int rowCount(const QModelIndex &parent = {}) const override;
     QVariant data(const QModelIndex &, int role = Qt::DisplayRole) const override;
-    void append(const QString &text, const QString &avatar = {});
-    void setAssets(DisplayAssetCache *cache);
+    QVariantMap emoteImages(const QModelIndex &, bool requestMissing) const;
+    void append(const QString &text, const QString &avatar = {}, qint64 highlightDeadline = 0,
+                QList<DanmakuEmote> emotes = {});
+    void setAssets(DisplayAssetCache *cache, bool showEmotes = false);
     void setAvatarsVisible(bool visible);
     void replace(const QStringList &rows);
     void clear();
 
   private:
     int limit_;
-    QStringList rows_, avatars_;
+    struct Row {
+        QString text, avatar;
+        qint64 highlightDeadline = 0;
+        QList<DanmakuEmote> emotes;
+    };
+    QList<Row> rows_;
     DisplayAssetCache *assets_ = nullptr;
     bool showAvatars_ = true;
 };

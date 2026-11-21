@@ -1,11 +1,15 @@
 #include "floating-windows.hpp"
+#include "danmaku-input-row.hpp"
+#include "dock-focus.hpp"
 #include "display-asset-cache.hpp"
 #include "dock-scroll-area.hpp"
 #include "room-realtime.hpp"
+#include <QAbstractTextDocumentLayout>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDeadlineTimer>
 #include <QDialog>
 #include <QDir>
 #include <QDockWidget>
@@ -19,6 +23,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLinearGradient>
 #include <QListView>
 #include <QMainWindow>
 #include <QPainter>
@@ -32,53 +37,95 @@
 #include <QSpinBox>
 #include <QStyle>
 #include <QStyledItemDelegate>
+#include <QTextCursor>
+#include <QTextDocument>
+#include <QTextImageFormat>
 #include <QTextLayout>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QtMath>
 #include <functional>
+#include <utility>
 
 namespace livehime {
+static constexpr qint64 HighlightDurationMs = 1200;
+static qint64 monotonicMs() { return QDeadlineTimer::current(Qt::PreciseTimer).deadline(); }
 static QJsonValue av(const QJsonArray &a, int i) { return i >= 0 && i < a.size() ? a.at(i) : QJsonValue{}; }
 DisplayListModel::DisplayListModel(int limit, QObject *p) : QAbstractListModel(p), limit_(qMax(1, limit)) {}
 int DisplayListModel::rowCount(const QModelIndex &p) const { return p.isValid() ? 0 : int(rows_.size()); }
 QVariant DisplayListModel::data(const QModelIndex &i, int role) const {
     if (!i.isValid() || i.row() < 0 || i.row() >= rows_.size())
         return {};
-    if (role == Qt::DecorationRole && assets_ && showAvatars_ && !avatars_[i.row()].isEmpty())
-        return QVariant::fromValue(assets_->get(avatars_[i.row()]));
+    const auto &row = rows_.at(i.row());
+    if (role == Qt::DecorationRole && assets_ && showAvatars_ && !row.avatar.isEmpty())
+        return QVariant::fromValue(assets_->get(row.avatar));
     if (role == Qt::DisplayRole || role == Qt::ToolTipRole)
-        return rows_[i.row()];
+        return row.text;
+    if (role == HighlightDeadlineRole && row.highlightDeadline)
+        return row.highlightDeadline;
+    if (role == EmotesRole && !row.emotes.isEmpty())
+        return QVariant::fromValue(row.emotes);
+    if (role == EmoteImagesRole && !row.emotes.isEmpty())
+        return emoteImages(i, false);
     return {};
 }
-void DisplayListModel::setAssets(DisplayAssetCache *c) {
+QVariantMap DisplayListModel::emoteImages(const QModelIndex &i, bool requestMissing) const {
+    QVariantMap images;
+    if (!assets_ || !i.isValid() || i.model() != this || i.row() >= rows_.size())
+        return images;
+    for (const auto &emote : rows_.at(i.row()).emotes) {
+        if (emote.url.isEmpty() || images.contains(emote.url))
+            continue;
+        const auto pixmap = requestMissing ? assets_->emote(emote.url) : assets_->cachedEmote(emote.url);
+        if (!pixmap.isNull())
+            images.insert(emote.url, pixmap);
+    }
+    return images;
+}
+void DisplayListModel::setAssets(DisplayAssetCache *c, bool showEmotes) {
     assets_ = c;
     connect(c, &DisplayAssetCache::ready, this, [this] {
         if (rowCount())
             emit dataChanged(index(0), index(rowCount() - 1), {Qt::DecorationRole});
     });
+    if (showEmotes) {
+        connect(c, &DisplayAssetCache::emoteReady, this, [this](const QString &url) {
+            for (int i = 0; i < rowCount(); ++i) {
+                for (const auto &emote : rows_.at(i).emotes) {
+                    if (emote.url == url) {
+                        emit dataChanged(index(i), index(i), {EmoteImagesRole, Qt::SizeHintRole});
+                        break;
+                    }
+                }
+            }
+        });
+    }
 }
 void DisplayListModel::setAvatarsVisible(bool v) {
     showAvatars_ = v;
     if (rowCount())
         emit dataChanged(index(0), index(rowCount() - 1), {Qt::DecorationRole});
 }
-void DisplayListModel::append(const QString &t, const QString &avatar) {
+void DisplayListModel::append(const QString &t, const QString &avatar, qint64 highlightDeadline,
+                              QList<DanmakuEmote> emotes) {
     if (rows_.size() >= limit_) {
         beginRemoveRows({}, 0, 0);
         rows_.removeFirst();
-        avatars_.removeFirst();
         endRemoveRows();
     }
     beginInsertRows({}, int(rows_.size()), int(rows_.size()));
-    rows_.append(t.left(8192));
-    avatars_.append(avatar);
+    const auto text = t.left(8192);
+    emotes.removeIf([&text](const DanmakuEmote &e) {
+        return e.start < 0 || e.length <= 0 || e.start > text.size() - e.length;
+    });
+    rows_.append({text, avatar, highlightDeadline, std::move(emotes)});
     endInsertRows();
 }
 void DisplayListModel::replace(const QStringList &r) {
     beginResetModel();
-    rows_ = r.mid(0, limit_);
-    avatars_ = QStringList(rows_.size(), QString{});
+    rows_.clear();
+    for (qsizetype i = 0; i < qMin<qsizetype>(limit_, r.size()); ++i)
+        rows_.append({r[i], {}, 0, {}});
     endResetModel();
 }
 void DisplayListModel::clear() { replace({}); }
@@ -196,14 +243,20 @@ class DanmakuInput final : public QLineEdit {
 
 class WrappedHistoryDelegate final : public QStyledItemDelegate {
   public:
-    explicit WrappedHistoryDelegate(QListView *view) : QStyledItemDelegate(view), view_(view) {}
+    explicit WrappedHistoryDelegate(QListView *view) : QStyledItemDelegate(view), view_(view) {
+        frameTimer_.setSingleShot(true);
+        frameTimer_.setInterval(33);
+        connect(&frameTimer_, &QTimer::timeout, this, [this] {
+            view_->viewport()->update(dirtyRows_);
+            dirtyRows_ = {};
+        });
+    }
     QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override {
         QStyleOptionViewItem styled(option);
         initStyleOption(&styled, index);
         const bool avatar = !qvariant_cast<QPixmap>(index.data(Qt::DecorationRole)).isNull();
         const int width = qMax(32, view_->viewport()->width());
-        QTextLayout layout(index.data().toString().replace(QChar('\n'), QChar(0x2028)), styled.font);
-        const qreal height = arrange(layout, qMax(16, width - 12 - (avatar ? 38 : 0)));
+        const qreal height = layoutMessage(index, styled, qMax(16, width - 12 - (avatar ? 38 : 0)), nullptr);
         return QSize(width, qMax(avatar ? 44 : 0, qCeil(height) + 12));
     }
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
@@ -216,19 +269,106 @@ class WrappedHistoryDelegate final : public QStyledItemDelegate {
         view_->style()->drawControl(QStyle::CE_ItemViewItem, &styled, painter, view_);
         painter->save();
         painter->setClipRect(option.rect);
+        const auto deadline = index.data(DisplayListModel::HighlightDeadlineRole).toLongLong();
+        if (deadline) {
+            const auto remaining = deadline - monotonicMs();
+            if (remaining > 0) {
+                auto tint = styled.palette.color(QPalette::Highlight);
+                const float strength = float(qMin(remaining, HighlightDurationMs)) / float(HighlightDurationMs);
+                tint.setAlphaF(0.24f * strength);
+                QLinearGradient wash(option.rect.topLeft(), option.rect.topRight());
+                wash.setColorAt(0, tint);
+                tint.setAlpha(0);
+                wash.setColorAt(1, tint);
+                painter->fillRect(option.rect, wash);
+                // Repaint only fading rows. No history rebuild or scroll changes between frames.
+                dirtyRows_ += option.rect;
+                if (!frameTimer_.isActive())
+                    frameTimer_.start();
+            }
+        }
         int left = option.rect.left() + 6;
         if (!avatar.isNull()) {
             painter->drawPixmap(QRect(left, option.rect.top() + 6, 32, 32), avatar);
             left += 38;
         }
-        painter->setPen(styled.palette.color(QPalette::Text));
-        QTextLayout layout(index.data().toString().replace(QChar('\n'), QChar(0x2028)), styled.font);
-        arrange(layout, qMax(16, option.rect.right() - left - 5));
-        layout.draw(painter, QPointF(left, option.rect.top() + 6));
+        painter->translate(left, option.rect.top() + 6);
+        layoutMessage(index, styled, qMax(16, option.rect.right() - left - 5), painter);
         painter->restore();
     }
 
   private:
+    static qreal layoutMessage(const QModelIndex &index, const QStyleOptionViewItem &style, int width,
+                               QPainter *painter) {
+        const auto text = index.data().toString();
+        const auto emotes = index.data(DisplayListModel::EmotesRole).value<QList<DanmakuEmote>>();
+        if (emotes.isEmpty()) {
+            QTextLayout layout(QString(text).replace(QChar('\n'), QChar(0x2028)), style.font);
+            const auto height = arrange(layout, width);
+            if (painter) {
+                painter->setPen(style.palette.color(QPalette::Text));
+                layout.draw(painter, {});
+            }
+            return height;
+        }
+
+        // Measuring offscreen history must not re-download evicted images. A newly
+        // visible row can request its preview again when the delegate paints it.
+        const auto *liveRows = painter ? dynamic_cast<const DisplayListModel *>(index.model()) : nullptr;
+        const auto images = liveRows ? liveRows->emoteImages(index, true)
+                                     : index.data(DisplayListModel::EmoteImagesRole).toMap();
+        // Build inline image objects only from decoded pixmaps. All chat and usernames
+        // are inserted as literal text, and the document never resolves a remote URL.
+        QTextDocument doc;
+        doc.setUndoRedoEnabled(false);
+        doc.setDocumentMargin(0);
+        doc.setDefaultFont(style.font);
+        QTextOption wrap;
+        wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        doc.setDefaultTextOption(wrap);
+        doc.setTextWidth(width);
+        QTextCursor cursor(&doc);
+        int pos = 0;
+        const QTextCharFormat plain;
+        QTextCharFormat placeholder;
+        auto tint = style.palette.color(QPalette::Highlight);
+        placeholder.setUnderlineStyle(QTextCharFormat::DotLine);
+        placeholder.setUnderlineColor(tint);
+        tint.setAlphaF(0.18f);
+        placeholder.setBackground(tint);
+        const int lineHeight = style.fontMetrics.height();
+        for (const auto &emote : emotes) {
+            if (emote.start < pos || emote.length <= 0 || emote.start > text.size() - emote.length)
+                continue;
+            cursor.insertText(text.mid(pos, emote.start - pos), plain);
+            pos = emote.start + emote.length;
+            const auto pixmap = images.value(emote.url).value<QPixmap>();
+            if (pixmap.isNull()) {
+                cursor.insertText(text.mid(emote.start, emote.length), placeholder);
+                continue;
+            }
+            const auto key = QStringLiteral("livehime-emote:/%1").arg(pixmap.cacheKey());
+            doc.addResource(QTextDocument::ImageResource, QUrl(key), pixmap);
+            const int height = emote.standalone ? qBound(48, lineHeight * 3, 96) : lineHeight;
+            const auto size = pixmap.size().scaled(qMin(width, emote.standalone ? 160 : 2 * height),
+                                                   height, Qt::KeepAspectRatio);
+            QTextImageFormat format;
+            format.setName(key);
+            format.setWidth(qMax(1, size.width()));
+            format.setHeight(qMax(1, size.height()));
+            format.setVerticalAlignment(QTextCharFormat::AlignMiddle);
+            cursor.insertImage(format);
+        }
+        cursor.insertText(text.mid(pos), plain);
+        if (painter) {
+            QAbstractTextDocumentLayout::PaintContext context;
+            context.palette = style.palette;
+            painter->setRenderHint(QPainter::SmoothPixmapTransform);
+            doc.documentLayout()->draw(painter, context);
+        }
+        return doc.size().height();
+    }
+
     static qreal arrange(QTextLayout &layout, qreal width) {
         QTextOption option;
         option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
@@ -247,10 +387,13 @@ class WrappedHistoryDelegate final : public QStyledItemDelegate {
         return y;
     }
     QListView *view_;
+    mutable QTimer frameTimer_;
+    mutable QRegion dirtyRows_;
 };
 class EntryHistoryModel final : public QAbstractListModel {
   public:
-    using QAbstractListModel::QAbstractListModel;
+    EntryHistoryModel(qint64 existingThrough, QObject *parent)
+        : QAbstractListModel(parent), existingThrough_(existingThrough) {}
     qint64 firstSequence() const { return rows_.isEmpty() ? 0 : rows_.constFirst().sequence; }
     void setEntries(const QList<RoomEntry> &entries) {
         beginResetModel();
@@ -261,15 +404,19 @@ class EntryHistoryModel final : public QAbstractListModel {
         return parent.isValid() ? 0 : static_cast<int>(rows_.size());
     }
     QVariant data(const QModelIndex &index, int role) const override {
-        if (!index.isValid() || index.row() < 0 || index.row() >= rows_.size() ||
-            (role != Qt::DisplayRole && role != Qt::ToolTipRole))
+        if (!index.isValid() || index.row() < 0 || index.row() >= rows_.size())
             return {};
         const auto &entry = rows_.at(index.row());
+        if (role == DisplayListModel::HighlightDeadlineRole && entry.sequence > existingThrough_)
+            return entry.receivedAtMs + HighlightDurationMs;
+        if (role != Qt::DisplayRole && role != Qt::ToolTipRole)
+            return {};
         const auto time = QDateTime::fromSecsSinceEpoch(entry.timestamp).toString(QStringLiteral("MM-dd HH:mm:ss"));
         return time + QStringLiteral("   ") + entry.name;
     }
   private:
     QList<RoomEntry> rows_;
+    qint64 existingThrough_;
 };
 
 class HistoryView final : public QListView {
@@ -320,6 +467,7 @@ struct FloatingWindows::Impl {
     QCheckBox *pins[DockCount]{};
     QPushButton *modes[DockCount]{}, *lockButton = nullptr, *giftSplitButton = nullptr;
     QPointer<QDialog> entryDialog;
+    QPointer<DanmakuInputRow> danmakuRow;
     QVBoxLayout *interactionLayout{}, *giftLayout{};
     DisplayAssetCache assets;
     DisplayListModel messages{500}, gifts{500}, anti{100}, audience{100}, guard{5000};
@@ -337,10 +485,14 @@ struct FloatingWindows::Impl {
     QCheckBox *showGifts{}, *showAnti{}, *showMedal{}, *showIdentity{}, *showAvatars{}, *pause{},
         *hideMoney{}, *paidOnly{};
     QSpinBox *fontSize{}, *minimumGift{}, *opacity{};
-    QJsonArray history;
-    QSet<QString> ids;
+    struct ReceivedEvent {
+        QJsonObject event;
+        qint64 bytes, highlightDeadline;
+        QList<DanmakuEmote> emotes;
+        bool reply = false;
+    };
+    QList<ReceivedEvent> history;
     QTimer renderTimer, giftVisibilityTimer;
-    QQueue<qint64> eventSizes;
     qint64 historyBytes = 0;
     QString watched = QStringLiteral("—"), likes = QStringLiteral("—");
     void updateTools(int k) {
@@ -378,6 +530,8 @@ struct FloatingWindows::Impl {
         const qreal wantedOpacity = floating && k == 0 && opacity ? opacity->value() / 100. : 1.;
         if (!qFuzzyCompare(dock->windowOpacity(), wantedOpacity))
             dock->setWindowOpacity(wantedOpacity);
+        if (k == 0 && danmakuRow)
+            danmakuRow->setPassthrough(floating && locked);
         applyingFlags = false;
         updateTools(k);
     }
@@ -396,7 +550,7 @@ struct FloatingWindows::Impl {
             ownHost = true;
         }
         for (auto m : {&messages, &gifts, &anti, &audience, &guard})
-            m->setAssets(&assets);
+            m->setAssets(&assets, m == &messages);
         std::array<QVBoxLayout *, DockCount> contentLayouts;
         for (int k = 0; k < DockCount; ++k) {
             auto *dock = registeredDocks[k];
@@ -419,6 +573,7 @@ struct FloatingWindows::Impl {
                 dock->setWidget(w);
             }
             panels[k] = w;
+            installDockFocusPolicy(dock, host);
             w->setObjectName(QStringLiteral("livehimeFloating%1").arg(k));
             w->setMinimumWidth(280);
             auto *shell = qobject_cast<QVBoxLayout *>(w->layout());
@@ -510,16 +665,32 @@ struct FloatingWindows::Impl {
         QObject::connect(service.data(), &RoomRealtime::events, owner, [this](const QJsonArray &b) {
             if (stopped || !panels[0])
                 return;
+            const auto deadline = panels[0]->isVisible() ? monotonicMs() + HighlightDurationMs : 0;
             for (auto v : b) {
-                const qint64 n = QJsonDocument(v.toObject()).toJson(QJsonDocument::Compact).size();
+                const auto event = v.toObject();
+                const qint64 n = QJsonDocument(event).toJson(QJsonDocument::Compact).size();
                 if (n > 256 * 1024)
                     continue;
-                history.append(v);
-                eventSizes.enqueue(n);
+                ReceivedEvent received{event, n, deadline, {}};
+                if (event.value("cmd").toString().startsWith("DANMU_MSG")) {
+                    const auto info = event.value("info").toArray();
+                    if (info.size() < 3 || !av(info, 1).isString())
+                        continue;
+                    const auto meta = av(info, 0).toArray();
+                    const auto rawExtra = av(meta, 15).toObject().value("extra");
+                    const auto extra = rawExtra.isObject() ? rawExtra.toObject()
+                        : QJsonDocument::fromJson(rawExtra.toString().toUtf8()).object();
+                    received.reply = extra.value("show_reply").toBool();
+                    received.emotes = danmakuEmotes(av(info, 1).toString(), meta, extra);
+                    for (const auto &emote : std::as_const(received.emotes)) {
+                        if (!emote.url.isEmpty())
+                            assets.emote(emote.url);
+                    }
+                }
+                history.append(std::move(received));
                 historyBytes += n;
                 while (history.size() > 1100 || historyBytes > 8 * 1024 * 1024) {
-                    history.removeFirst();
-                    historyBytes -= eventSizes.dequeue();
+                    historyBytes -= history.takeFirst().bytes;
                 }
             }
             if ((panels[0]->isVisible() || (docks[GiftDock] && docks[GiftDock]->isVisible())) &&
@@ -530,9 +701,7 @@ struct FloatingWindows::Impl {
             if (stopped)
                 return;
             history = {};
-            eventSizes.clear();
             historyBytes = 0;
-            ids.clear();
             watched = likes = QStringLiteral("—");
             messages.clear();
             gifts.clear();
@@ -607,7 +776,8 @@ struct FloatingWindows::Impl {
             auto *view = new HistoryView(dialog);
             view->setObjectName("entry-history-list");
             view->setAccessibleName(QStringLiteral("入场时间和观众"));
-            auto *model = new EntryHistoryModel(view);
+            const auto &entries = service->entryHistory();
+            auto *model = new EntryHistoryModel(entries.isEmpty() ? 0 : entries.constLast().sequence, view);
             view->setModel(model);
             layout->addWidget(view, 1);
             auto refresh = [room = service, summary, view, model] {
@@ -688,7 +858,7 @@ struct FloatingWindows::Impl {
         lock->setObjectName("interaction-lock");
         lock->setCheckable(true);
         lock->setToolTip(
-            QStringLiteral("仅浮动时可用；在 B站直播主面板点击“解除互动穿透”或重新打开直播互动即可恢复"));
+            QStringLiteral("浮窗穿透时仍可输入和发送弹幕。点击主面板的“解除互动穿透”或重新打开直播互动可解锁。"));
         auto config = new QPushButton(QStringLiteral("显示设置"));
         config->setObjectName("interaction-settings");
         auto detach = giftSplitButton = new QPushButton(QStringLiteral("拆分礼物"));
@@ -709,7 +879,6 @@ struct FloatingWindows::Impl {
         });
         QObject::connect(clear, &QPushButton::clicked, owner, [this] {
             history = {};
-            eventSizes.clear();
             historyBytes = 0;
             messages.clear();
             gifts.clear();
@@ -775,10 +944,8 @@ struct FloatingWindows::Impl {
         input->setAccessibleName(QStringLiteral("发送弹幕"));
         auto *button = new QPushButton(QStringLiteral("发送"));
         button->setObjectName("danmakuSend");
-        auto *row = new QHBoxLayout;
-        row->addWidget(input, 1);
-        row->addWidget(button);
-        layout->addLayout(row);
+        danmakuRow = new DanmakuInputRow(docks[0], input, button, layout->parentWidget());
+        layout->addWidget(danmakuRow);
         auto *feedback = new QLabel;
         feedback->setObjectName("danmakuSendStatus");
         feedback->setTextFormat(Qt::PlainText);
@@ -1018,8 +1185,8 @@ struct FloatingWindows::Impl {
         gifts.clear();
         anti.clear();
         QSet<QString> seen;
-        for (auto v : history) {
-            auto e = v.toObject();
+        for (const auto &received : std::as_const(history)) {
+            const auto &e = received.event;
             auto cmd = e.value("cmd").toString().section(':', 0, 0);
             auto data = e.value("data").toObject();
             auto id = data.value("tid").toString(data.value("id_str").toString());
@@ -1063,15 +1230,18 @@ struct FloatingWindows::Impl {
                     if (showIdentity->isChecked() && level)
                         label += QStringLiteral(" [航海 %1]").arg(level);
                 }
-                QString body = av(info, 1).toString();
-                auto extra = QJsonDocument::fromJson(ext.value("extra").toString().toUtf8()).object();
-                if (extra.value("show_reply").toBool())
-                    body = QStringLiteral("回复： ") + body;
+                auto prefix = label + QStringLiteral("：");
+                if (received.reply)
+                    prefix += QStringLiteral("回复： ");
+                auto emotes = received.emotes;
+                for (auto &emote : emotes)
+                    emote.start += int(prefix.size());
                 messages.append(
-                    label + QStringLiteral("：") + body,
+                    prefix + av(info, 1).toString(),
                     mystery(row)
                         ? QString{}
-                        : ext.value("user").toObject().value("base").toObject().value("face").toString());
+                        : ext.value("user").toObject().value("base").toObject().value("face").toString(),
+                    received.highlightDeadline, std::move(emotes));
             } else if (cmd == "SEND_GIFT") {
                 if (paidOnly->isChecked() && data.value("coin_type") != "gold")
                     continue;
@@ -1101,7 +1271,8 @@ struct FloatingWindows::Impl {
                     kind = QStringLiteral("分享");
                 if (cmd == "LIKE_INFO_V3_CLICK")
                     kind = QStringLiteral("点赞");
-                anti.append(privateDisplayName(data) + "  " + kind);
+                anti.append(privateDisplayName(data) + "  " + kind, {},
+                            cmd == "INTERACT_WORD" && t == 1 ? received.highlightDeadline : 0);
             }
         }
         stats->setText(QStringLiteral("看过 %1  ·  点赞 %2").arg(watched, likes));
@@ -1131,10 +1302,14 @@ struct FloatingWindows::Impl {
 FloatingWindows::FloatingWindows(RoomRealtime *s, QString path, QWidget *p,
                                  std::array<QDockWidget *, DockCount> registeredDocks)
     : QObject(p), d(std::make_unique<Impl>(this, s, path, p, registeredDocks)) {
+    d->docks[0]->installEventFilter(this);
     d->docks[GiftDock]->installEventFilter(this);
 }
 FloatingWindows::~FloatingWindows() { shutdown(); }
 bool FloatingWindows::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == d->docks[0] && event->type() == QEvent::HideToParent &&
+        d->locked && !d->stopped && !d->applyingFlags && d->docks[0]->isHidden())
+        d->setLocked(false); // The OBS Docks menu blocks visibilityChanged.
     if (watched == d->docks[GiftDock] && !d->stopped && !d->applyingFlags) {
         // OBS blocks dock signals while handling its Docks menu. QWidget events
         // still arrive; wait out temporary hides while Qt reparents a floating dock.
@@ -1182,7 +1357,8 @@ void FloatingWindows::showWindow(int kind) {
     if (kind == 0 || kind == GiftDock)
         d->rebuild();
     w->raise();
-    w->activateWindow();
+    if (w->isFloating())
+        w->activateWindow();
 }
 void FloatingWindows::unlockInteraction() { d->setLocked(false); }
 void FloatingWindows::dockWindow(int kind) {
@@ -1213,6 +1389,8 @@ void FloatingWindows::shutdown() {
     d->stopped = true;
     d->renderTimer.stop();
     d->giftVisibilityTimer.stop();
+    if (d->docks[0])
+        d->docks[0]->removeEventFilter(this);
     if (d->docks[GiftDock])
         d->docks[GiftDock]->removeEventFilter(this);
     for (int k = 0; k < DockCount; ++k) {
