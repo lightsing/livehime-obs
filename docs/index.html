@@ -14,7 +14,7 @@
       <a class="brand" href="#top">
         <img class="brand-icon" src="assets/favicon.svg" alt="Livehime OBS">
         <span>Livehime OBS</span>
-        <span class="brand-version">v0.2.4</span>
+        <span class="brand-version">v0.4.0</span>
       </a>
       <nav class="nav-links" id="navLinks">
         <a href="#why">定位对比</a>
@@ -25,7 +25,7 @@
       </nav>
       <div class="nav-actions">
         <a class="btn btn-ghost" href="https://github.com/lightsing/livehime-obs" target="_blank" rel="noopener">GitHub</a>
-        <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/tag/v0.2.4" target="_blank" rel="noopener">下载 v0.2.4</a>
+        <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/tag/v0.4.0" target="_blank" rel="noopener">下载 v0.4.0</a>
         <button class="nav-toggle" id="navToggle" type="button" aria-label="展开导航">菜单</button>
       </div>
     </div>
@@ -45,8 +45,8 @@
             既不用受限于官方第三方推流码的 5000 粉门槛或靠油猴脚本手动复制，也不用再开着直播姬做本地 RTMP 中转——点 OBS「控件」里的原生按钮即可联动两端开停播，断线可重连同一场，下播成功后自动恢复原 OBS 推流服务；登录会话使用当前 Windows 用户的 DPAPI 加密，本场推流密钥只留在进程内。
           </p>
           <div class="hero-cta">
-            <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/download/v0.2.4/livehime-obs-0.2.4-windows-x64-setup.exe" target="_blank" rel="noopener">
-              下载安装包 (v0.2.4)
+            <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/download/v0.4.0/livehime-obs-0.4.0-windows-x64-setup.exe" target="_blank" rel="noopener">
+              下载安装包 (v0.4.0)
             </a>
             <a class="btn btn-secondary" href="#screenshots">看界面截图</a>
             <a class="btn btn-secondary" href="#start">三步上手教程</a>
@@ -142,7 +142,7 @@
           <article class="feature-card">
             <div class="feature-icon">🎛️</div>
             <h3>标题、分区、4:3 封面原生管理</h3>
-            <p>把直播姬常用的开播设置移植进 OBS 面板：标题改完停手约 1 秒自动同步；父分类与子分区联动支持打字搜索；点击封面选图即可拖动、滚轮缩放并裁成标准 4:3 直接上传。</p>
+            <p>把直播姬常用的开播设置移植进 OBS 面板：标题停止输入 5 秒后自动同步；父分类与子分区联动支持打字搜索；点击封面选图即可拖动、滚轮缩放并裁成标准 4:3 直接上传。</p>
             <div class="feature-tags">
               <span class="tag">标题自动同步</span>
               <span class="tag">打字搜分区</span>
@@ -236,7 +236,7 @@
           <div class="step-card">
             <div class="step-num">STEP 01</div>
             <h3>安装插件</h3>
-            <p>先完全关闭 OBS，下载并运行 <code>livehime-obs-0.2.4-windows-x64-setup.exe</code>。已有旧版时直接运行即可原位升级，无需先卸载。</p>
+            <p>先完全关闭 OBS，下载并运行 <code>livehime-obs-0.4.0-windows-x64-setup.exe</code>。使用安装器安装的旧版可直接升级。0.4.0 起会从 npm 检查和下载更新，优先使用国内镜像；正常退出所有 OBS 实例后才打开安装向导。</p>
           </div>
           <div class="step-card">
             <div class="step-num">STEP 02</div>
@@ -260,18 +260,18 @@
             </ul>
           </div>
           <div class="info-panel warn">
-            <h3>当前版本功能范围（v0.2.4）</h3>
+            <h3>当前版本功能范围（v0.4.0）</h3>
             <ul>
               <li>本插件面向 <strong>Windows x64 + OBS Studio 33.0.1</strong>；请使用 OBS「控件」面板的按钮发起开停播，快捷键或托盘菜单暂不经过插件接管。</li>
-              <li>实时面板当前提供弹幕、礼物、SC、观众榜、大航海与超管提醒展示，暂未实现发弹幕、语音播报、礼物动画和房管操作。</li>
-              <li>退出 OBS 前请先正常下播；0.2.4 已对齐直播姬 8.15.0.11311 协议，新版协议下的实播授权与长播表现仍在持续验证中。</li>
+              <li>在直播互动面板可以查看并发送弹幕，查看本次连接的入场历史、礼物和 SC。观众榜、大航海与超管提醒也可在 OBS 中查看。</li>
+              <li>退出 OBS 前请先正常下播；0.4.0 已对齐直播姬 8.15.0.11311 协议，新版协议下的实播授权与长播表现仍在持续验证中。</li>
             </ul>
           </div>
         </div>
 
         <div class="hero-cta" style="margin-top:26px;margin-bottom:0;">
-          <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/download/v0.2.4/livehime-obs-0.2.4-windows-x64-setup.exe" target="_blank" rel="noopener">下载 Setup 安装器 (v0.2.4)</a>
-          <a class="btn btn-secondary" href="https://github.com/lightsing/livehime-obs/releases/download/v0.2.4/livehime-obs-0.2.4-windows-x64.zip" target="_blank" rel="noopener">下载便携 ZIP 包</a>
+          <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/download/v0.4.0/livehime-obs-0.4.0-windows-x64-setup.exe" target="_blank" rel="noopener">下载 Setup 安装器 (v0.4.0)</a>
+          <a class="btn btn-secondary" href="https://github.com/lightsing/livehime-obs/releases/download/v0.4.0/livehime-obs-0.4.0-windows-x64.zip" target="_blank" rel="noopener">下载便携 ZIP 包</a>
           <a class="btn btn-secondary" href="tech.html">查看技术细节、安全架构与源码构建 →</a>
         </div>
       </div>

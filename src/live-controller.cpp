@@ -1,5 +1,6 @@
 #include "live-controller.hpp"
 #include <QTimer>
+#include <chrono>
 
 namespace livehime {
 LiveController::LiveController(QString storageDirectory, QObject *parent)
@@ -10,7 +11,8 @@ LiveController::LiveController(QString storageDirectory, QObject *parent)
     if (!deviceError.isEmpty()) status_ = deviceError;
     client_->setDeviceId(deviceId_);
     titleDebounce_.setSingleShot(true);
-    titleDebounce_.setInterval(1000);
+    titleDebounce_.setTimerType(Qt::PreciseTimer);
+    titleDebounce_.setInterval(std::chrono::seconds{5});
     connect(&titleDebounce_, &QTimer::timeout, this, [this] {
         titleReady_ = true;
         notifyMetadata();

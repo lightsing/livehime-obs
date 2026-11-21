@@ -1,5 +1,6 @@
 #include "room-dock.hpp"
 #include "cover-crop-dialog.hpp"
+#include "dock-scroll-area.hpp"
 #include "login-dialog.hpp"
 #include "native-stream-controls.hpp"
 #include <QBuffer>
@@ -104,40 +105,41 @@ RoomDock::RoomDock(const QString &storageDirectory, QWidget *parent)
 RoomDock::RoomDock(LiveController *controller, QWidget *parent)
     : QWidget(parent), controller_(controller), nativeControls_(new NativeStreamControls(this)) {
     setMinimumWidth(300);
-    auto *layout = new QVBoxLayout(this);
-    account_ = new QLabel(QStringLiteral("未登录"), this);
+    auto *layout = contentLayout_ = addScrollableDockContent(new QVBoxLayout(this));
+    auto *content = layout->parentWidget();
+    account_ = new QLabel(QStringLiteral("未登录"), content);
     account_->setTextFormat(Qt::PlainText);
     layout->addWidget(account_);
     auto *accountButtons = new QHBoxLayout;
-    login_ = new QPushButton(QStringLiteral("扫码登录"), this);
-    logout_ = new QPushButton(QStringLiteral("退出登录"), this);
-    refresh_ = new QPushButton(QStringLiteral("刷新状态"), this);
+    login_ = new QPushButton(QStringLiteral("扫码登录"), content);
+    logout_ = new QPushButton(QStringLiteral("退出登录"), content);
+    refresh_ = new QPushButton(QStringLiteral("刷新状态"), content);
     accountButtons->addWidget(login_);
     accountButtons->addWidget(logout_);
     accountButtons->addWidget(refresh_);
     layout->addLayout(accountButtons);
-    roomLabel_ = new QLabel(QStringLiteral("房间尚未加载"), this);
+    roomLabel_ = new QLabel(QStringLiteral("房间尚未加载"), content);
     roomLabel_->setTextFormat(Qt::PlainText);
     layout->addWidget(roomLabel_);
     auto *form = new QFormLayout;
-    title_ = new QLineEdit(this);
+    title_ = new QLineEdit(content);
     title_->setObjectName(QStringLiteral("title-edit"));
     title_->setPlaceholderText(QStringLiteral("直播标题"));
-    title_->setToolTip(QStringLiteral("停止输入约 1 秒、离开输入框或点击开播时自动同步"));
+    title_->setToolTip(QStringLiteral("停止输入 5 秒后自动保存；按回车、离开输入框或开始直播时立即同步"));
     title_->setMaxLength(80);
     form->addRow(QStringLiteral("标题"), title_);
-    titleHint_ = new QLabel(this);
+    titleHint_ = new QLabel(content);
     titleHint_->setTextFormat(Qt::PlainText);
     titleHint_->setWordWrap(true);
     titleHint_->setForegroundRole(QPalette::PlaceholderText);
     form->addRow(QString(), titleHint_);
-    parentArea_ = new QComboBox(this);
+    parentArea_ = new QComboBox(content);
     parentArea_->setObjectName(QStringLiteral("parent-area-combo"));
     parentArea_->setPlaceholderText(QStringLiteral("选择父分类"));
     parentArea_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     parentArea_->setMinimumContentsLength(12);
     form->addRow(QStringLiteral("父分类"), parentArea_);
-    area_ = new QComboBox(this);
+    area_ = new QComboBox(content);
     area_->setObjectName(QStringLiteral("area-combo"));
     area_->setEditable(true);
     area_->setInsertPolicy(QComboBox::NoInsert);
@@ -150,38 +152,38 @@ RoomDock::RoomDock(LiveController *controller, QWidget *parent)
     area_->completer()->setFilterMode(Qt::MatchContains);
     form->addRow(QStringLiteral("子分区"), area_);
     layout->addLayout(form);
-    areaHint_ = new QLabel(this);
+    areaHint_ = new QLabel(content);
     areaHint_->setWordWrap(true);
     areaHint_->setTextFormat(Qt::PlainText);
     layout->addWidget(areaHint_);
-    coverPreview_ = new CoverButton(this);
+    coverPreview_ = new CoverButton(content);
     layout->addWidget(coverPreview_);
-    review_ = new QLabel(this);
+    review_ = new QLabel(content);
     review_->setTextFormat(Qt::PlainText);
     review_->setWordWrap(true);
     layout->addWidget(review_);
-    retry_ = new QPushButton(QStringLiteral("重试 OBS 连接（当前场次）"), this);
+    retry_ = new QPushButton(QStringLiteral("重试 OBS 连接（当前场次）"), content);
     retry_->setObjectName(QStringLiteral("retry-connection-button"));
     layout->addWidget(retry_);
-    status_ = new QLabel(this);
+    status_ = new QLabel(content);
     status_->setTextFormat(Qt::PlainText);
     status_->setWordWrap(true);
     status_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(status_);
-    verification_ = new QPushButton(QStringLiteral("打开平台核验页面"), this);
+    verification_ = new QPushButton(QStringLiteral("打开平台核验页面"), content);
     layout->addWidget(verification_);
-    auto *roomButton = new QPushButton(QStringLiteral("打开我的直播间"), this);
+    auto *roomButton = new QPushButton(QStringLiteral("打开我的直播间"), content);
     layout->addWidget(roomButton);
     auto *realtimeButtons = new QHBoxLayout;
     const QStringList names{QStringLiteral("直播互动"), QStringLiteral("房间观众"), QStringLiteral("大航海")};
     for (int i = 0; i < names.size(); ++i) {
-        auto *button = new QPushButton(names.at(i), this);
+        auto *button = new QPushButton(names.at(i), content);
         button->setObjectName(QStringLiteral("realtime-window-%1").arg(i));
         connect(button, &QPushButton::clicked, this, [this, i] { emit openRealtimeWindow(i); });
         realtimeButtons->addWidget(button);
     }
     layout->addLayout(realtimeButtons);
-    auto *unlockInteraction = new QPushButton(QStringLiteral("解除互动穿透"), this);
+    auto *unlockInteraction = new QPushButton(QStringLiteral("解除互动穿透"), content);
     unlockInteraction->setObjectName(QStringLiteral("realtime-unlock-interaction"));
     unlockInteraction->setToolTip(QStringLiteral("恢复直播互动窗口的鼠标操作并显示窗口"));
     connect(unlockInteraction, &QPushButton::clicked, this, &RoomDock::unlockRealtimeInteraction);
@@ -237,6 +239,10 @@ RoomDock::RoomDock(LiveController *controller, QWidget *parent)
     updateTitle();
     showCover();
     updateView();
+}
+
+void RoomDock::addUpdateControls(QWidget *controls) {
+    contentLayout_->insertWidget(contentLayout_->count() - 1, controls);
 }
 
 void RoomDock::setRealtimeAvailable(bool available) {

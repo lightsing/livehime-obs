@@ -1,17 +1,24 @@
 #include "floating-windows.hpp"
 #include "display-asset-cache.hpp"
+#include "dock-scroll-area.hpp"
 #include "room-realtime.hpp"
 #include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QDateTime>
+#include <QDialog>
 #include <QDir>
 #include <QDockWidget>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QInputMethod>
+#include <QInputMethodEvent>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListView>
 #include <QMainWindow>
 #include <QPainter>
@@ -27,6 +34,7 @@
 #include <QStyledItemDelegate>
 #include <QTextLayout>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #include <QtMath>
 #include <functional>
 
@@ -149,6 +157,43 @@ QList<RankChoice> audienceChoices(const QJsonObject &info) {
     return out;
 }
 
+class SettingsSpinBox final : public QSpinBox {
+  public:
+    SettingsSpinBox() { setFocusPolicy(Qt::StrongFocus); }
+
+  protected:
+    void wheelEvent(QWheelEvent *event) override {
+        if (hasFocus())
+            QSpinBox::wheelEvent(event);
+        else
+            event->ignore();
+    }
+};
+
+class DanmakuInput final : public QLineEdit {
+  protected:
+    void inputMethodEvent(QInputMethodEvent *event) override {
+        composing_ = !event->preeditString().isEmpty();
+        QLineEdit::inputMethodEvent(event);
+    }
+    void keyPressEvent(QKeyEvent *event) override {
+        const bool enter = event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter;
+        if (enter && event->isAutoRepeat()) {
+            event->accept();
+            return;
+        }
+        if (composing_ && enter) {
+            QGuiApplication::inputMethod()->commit();
+            event->accept();
+            return;
+        }
+        QLineEdit::keyPressEvent(event);
+    }
+
+  private:
+    bool composing_ = false;
+};
+
 class Panel final : public QWidget {
   public:
     std::function<void(bool)> visibility;
@@ -230,6 +275,30 @@ class WrappedHistoryDelegate final : public QStyledItemDelegate {
     }
     QListView *view_;
 };
+class EntryHistoryModel final : public QAbstractListModel {
+  public:
+    using QAbstractListModel::QAbstractListModel;
+    qint64 firstSequence() const { return rows_.isEmpty() ? 0 : rows_.constFirst().sequence; }
+    void setEntries(const QList<RoomEntry> &entries) {
+        beginResetModel();
+        rows_ = entries;
+        endResetModel();
+    }
+    int rowCount(const QModelIndex &parent = {}) const override {
+        return parent.isValid() ? 0 : static_cast<int>(rows_.size());
+    }
+    QVariant data(const QModelIndex &index, int role) const override {
+        if (!index.isValid() || index.row() < 0 || index.row() >= rows_.size() ||
+            (role != Qt::DisplayRole && role != Qt::ToolTipRole))
+            return {};
+        const auto &entry = rows_.at(index.row());
+        const auto time = QDateTime::fromSecsSinceEpoch(entry.timestamp).toString(QStringLiteral("MM-dd HH:mm:ss"));
+        return time + QStringLiteral("   ") + entry.name;
+    }
+  private:
+    QList<RoomEntry> rows_;
+};
+
 class HistoryView final : public QListView {
   public:
     bool pauseOnHover = false, hovered = false;
@@ -278,6 +347,7 @@ struct FloatingWindows::Impl {
     QCheckBox *pins[3]{};
     QPushButton *modes[3]{}, *lockButton = nullptr;
     QPointer<Panel> giftWindow;
+    QPointer<QDialog> entryDialog;
     QVBoxLayout *interactionLayout{};
     DisplayAssetCache assets;
     DisplayListModel messages{500}, gifts{500}, anti{100}, audience{100}, guard{5000};
@@ -356,6 +426,7 @@ struct FloatingWindows::Impl {
             m->setAssets(&assets);
         const QStringList titles = {QStringLiteral("直播互动"), QStringLiteral("房间观众"),
                                     QStringLiteral("大航海")};
+        std::array<QVBoxLayout *, 3> contentLayouts;
         for (int k = 0; k < 3; ++k) {
             auto *dock = registeredDocks[k];
             if (!dock) {
@@ -378,24 +449,27 @@ struct FloatingWindows::Impl {
             }
             panels[k] = w;
             w->setObjectName(QStringLiteral("livehimeFloating%1").arg(k));
-            w->setMinimumSize(280, 240);
-            auto *l = qobject_cast<QVBoxLayout *>(w->layout());
-            if (!l)
-                l = new QVBoxLayout(w);
-            while (auto *item = l->takeAt(0)) {
+            w->setMinimumWidth(280);
+            auto *shell = qobject_cast<QVBoxLayout *>(w->layout());
+            if (!shell)
+                shell = new QVBoxLayout(w);
+            while (auto *item = shell->takeAt(0)) {
                 delete item->widget();
                 delete item;
             }
+            auto *l = addScrollableDockContent(shell);
+            contentLayouts[k] = l;
+            auto *content = l->parentWidget();
             auto bar = new QHBoxLayout;
-            auto pin = pins[k] = new QCheckBox(QStringLiteral("置顶"), w);
+            auto pin = pins[k] = new QCheckBox(QStringLiteral("置顶"), content);
             pin->setObjectName(QStringLiteral("window-pin-%1").arg(k));
             pin->setChecked(settings.value(QString("pin%1").arg(k), true).toBool());
             bar->addWidget(pin);
-            modes[k] = new QPushButton(w);
+            modes[k] = new QPushButton(content);
             modes[k]->setObjectName(QStringLiteral("window-mode-%1").arg(k));
             bar->addWidget(modes[k]);
             bar->addStretch();
-            auto close = new QPushButton(QStringLiteral("关闭"), w);
+            auto close = new QPushButton(QStringLiteral("关闭"), content);
             bar->addWidget(close);
             l->addLayout(bar);
             QObject::connect(close, &QPushButton::clicked, dock, &QWidget::hide);
@@ -411,7 +485,7 @@ struct FloatingWindows::Impl {
                 else
                     owner->floatWindow(k);
             });
-            status[k] = new QLabel(service->status(), w);
+            status[k] = new QLabel(service->status(), content);
             status[k]->setWordWrap(true);
             l->addWidget(status[k]);
             QObject::connect(dock, &QDockWidget::visibilityChanged, owner, [this, k](bool v) {
@@ -444,9 +518,9 @@ struct FloatingWindows::Impl {
         }
         settings.setValue("nativeDocks", true);
         settings.setValue("interactionLocked", false); // Restart always recovers mouse control.
-        buildInteraction();
-        buildAudience();
-        buildGuard();
+        buildInteraction(contentLayouts[0]);
+        buildAudience(contentLayouts[1]);
+        buildGuard(contentLayouts[2]);
         renderTimer.setSingleShot(true);
         renderTimer.setInterval(50);
         QObject::connect(&renderTimer, &QTimer::timeout, owner, [this] { rebuild(); });
@@ -536,9 +610,62 @@ struct FloatingWindows::Impl {
         });
         return c;
     }
-    void buildInteraction() {
-        auto *w = panels[0].data();
-        auto l = interactionLayout = qobject_cast<QVBoxLayout *>(w->layout());
+    void showEntryHistory() {
+        if (!service || stopped) return;
+        if (!entryDialog) {
+            auto *dialog = new QDialog(panels[0]);
+            entryDialog = dialog;
+            dialog->setObjectName("entry-history-dialog");
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->setWindowTitle(QStringLiteral("入场历史"));
+            dialog->resize(360, 400);
+            auto *layout = new QVBoxLayout(dialog);
+            auto *summary = new QLabel(dialog);
+            layout->addWidget(summary);
+            auto *view = new HistoryView(dialog);
+            view->setObjectName("entry-history-list");
+            view->setAccessibleName(QStringLiteral("入场时间和观众"));
+            auto *model = new EntryHistoryModel(view);
+            view->setModel(model);
+            layout->addWidget(view, 1);
+            auto refresh = [room = service, summary, view, model] {
+                if (!room)
+                    return;
+                auto *scroll = view->verticalScrollBar();
+                const auto top = view->indexAt(QPoint(1, 0));
+                const bool follow = scroll->value() == scroll->maximum() || !top.isValid();
+                const auto firstVisible = model->firstSequence() + top.row();
+                const int topOffset = follow ? 0 : view->visualRect(top).top();
+                model->setEntries(room->entryHistory());
+                summary->setText(model->rowCount() ? QStringLiteral("本次连接 · 最近 %1 条入场记录").arg(model->rowCount())
+                                                   : QStringLiteral("本次连接尚未收到入场记录"));
+                if (follow) {
+                    view->scrollToBottom();
+                } else if (firstVisible < model->firstSequence()) {
+                    view->scrollToTop();
+                } else {
+                    const auto row = static_cast<int>(firstVisible - model->firstSequence());
+                    view->scrollTo(model->index(row, 0), QAbstractItemView::PositionAtTop);
+                    scroll->setValue(scroll->value() - topOffset);
+                }
+            };
+            refresh();
+            QTimer::singleShot(0, view, &QListView::scrollToBottom);
+            auto *timer = new QTimer(dialog);
+            timer->setSingleShot(true);
+            timer->setInterval(200);
+            QObject::connect(timer, &QTimer::timeout, dialog, refresh);
+            QObject::connect(service.data(), &RoomRealtime::entryHistoryChanged, dialog,
+                             [timer] { if (!timer->isActive()) timer->start(); });
+            QObject::connect(service.data(), &RoomRealtime::contextChanged, dialog, &QDialog::reject);
+            QObject::connect(service.data(), &RoomRealtime::stopped, dialog, &QDialog::reject);
+        }
+        entryDialog->show();
+        entryDialog->raise();
+        entryDialog->activateWindow();
+    }
+    void buildInteraction(QVBoxLayout *l) {
+        interactionLayout = l;
         auto tools = new QGridLayout;
         auto lock = lockButton = new QPushButton(QStringLiteral("锁定穿透"));
         lock->setObjectName("interaction-lock");
@@ -546,6 +673,7 @@ struct FloatingWindows::Impl {
         lock->setToolTip(
             QStringLiteral("仅浮动时可用；在 B站直播主面板点击“解除互动穿透”或重新打开直播互动即可恢复"));
         auto config = new QPushButton(QStringLiteral("显示设置"));
+        config->setObjectName("interaction-settings");
         auto detach = new QPushButton(QStringLiteral("拆分/合回礼物"));
         auto clear = new QPushButton(QStringLiteral("清屏"));
         int toolIndex = 0;
@@ -587,8 +715,15 @@ struct FloatingWindows::Impl {
             anti.clear();
             rebuild();
         });
+        auto *summaryRow = new QHBoxLayout;
         stats = new QLabel;
-        l->addWidget(stats);
+        stats->setWordWrap(true);
+        summaryRow->addWidget(stats, 1);
+        auto *entries = new QPushButton(QStringLiteral("入场历史"));
+        entries->setObjectName("show-entry-history");
+        summaryRow->addWidget(entries);
+        l->addLayout(summaryRow);
+        QObject::connect(entries, &QPushButton::clicked, owner, [this] { showEntryHistory(); });
         settingsPane = new QWidget;
         auto f = new QFormLayout(settingsPane);
         showAvatars = check("avatars", QStringLiteral("显示头像"), true, f);
@@ -599,7 +734,7 @@ struct FloatingWindows::Impl {
         pause = check("pause", QStringLiteral("悬停暂停滚动"), false, f);
         paidOnly = check("paidOnly", QStringLiteral("只显示付费礼物"), false, f);
         auto spin = [this, f](const QString &key, const QString &label, int low, int high, int def) {
-            auto s = new QSpinBox;
+            auto *s = new SettingsSpinBox;
             s->setRange(low, high);
             s->setValue(settings.value(key, def).toInt());
             f->addRow(label, s);
@@ -621,10 +756,62 @@ struct FloatingWindows::Impl {
         messageView = view(&messages, l);
         messageView->setObjectName("messageHistory");
         messageView->resume = [this] { renderTimer.start(); };
+        buildDanmakuInput(l);
         antiView = view(&anti, l);
         antiView->setObjectName("antiHistory");
         antiView->resume = [this] { renderTimer.start(); };
         updateAppearance();
+    }
+    void buildDanmakuInput(QVBoxLayout *layout) {
+        auto *input = new DanmakuInput;
+        input->setObjectName("danmakuInput");
+        input->setAccessibleName(QStringLiteral("发送弹幕"));
+        auto *button = new QPushButton(QStringLiteral("发送"));
+        button->setObjectName("danmakuSend");
+        auto *row = new QHBoxLayout;
+        row->addWidget(input, 1);
+        row->addWidget(button);
+        layout->addLayout(row);
+        auto *feedback = new QLabel;
+        feedback->setObjectName("danmakuSendStatus");
+        feedback->setTextFormat(Qt::PlainText);
+        feedback->setWordWrap(true);
+        layout->addWidget(feedback);
+        auto refresh = [this, input, button] {
+            const bool ready = service && service->canSendDanmaku();
+            const bool busy = ready && service->sendingDanmaku();
+            input->setEnabled(ready);
+            input->setReadOnly(busy);
+            input->setPlaceholderText(ready ? QStringLiteral("输入弹幕") : QStringLiteral("登录并加载房间后可发弹幕"));
+            button->setEnabled(ready && !busy && !input->text().trimmed().isEmpty());
+        };
+        auto reset = [input, feedback, refresh] {
+            input->clear();
+            feedback->clear();
+            feedback->hide();
+            refresh();
+        };
+        auto submit = [this, input, button, feedback, refresh] {
+            if (!service || !button->isEnabled()) return;
+            feedback->setText(QStringLiteral("发送中…"));
+            feedback->show();
+            service->sendDanmaku(input->text());
+            refresh();
+        };
+        QObject::connect(input, &QLineEdit::textChanged, input, refresh);
+        QObject::connect(input, &QLineEdit::returnPressed, input, submit);
+        QObject::connect(button, &QPushButton::clicked, input, submit);
+        QObject::connect(service.data(), &RoomRealtime::danmakuSendFinished, input,
+                         [input, feedback, refresh](bool accepted, const QString &message) {
+            if (accepted) input->clear();
+            feedback->setText(message);
+            feedback->show();
+            refresh();
+        });
+        QObject::connect(service.data(), &RoomRealtime::contextChanged, input, reset);
+        QObject::connect(service.data(), &RoomRealtime::stopped, input, reset);
+        QObject::connect(service.data(), &QObject::destroyed, input, reset);
+        reset();
     }
     void updateAppearance() {
         if (!messageView)
@@ -643,8 +830,7 @@ struct FloatingWindows::Impl {
         if (split && giftWindow)
             giftWindow->setVisible(showGifts->isChecked());
     }
-    void buildAudience() {
-        auto l = qobject_cast<QVBoxLayout *>(panels[1]->layout());
+    void buildAudience(QVBoxLayout *l) {
         master = new QComboBox;
         master->setObjectName("audienceMaster");
         secondary = new QPushButton;
@@ -713,8 +899,7 @@ struct FloatingWindows::Impl {
         audience.clear();
         service->selectAudience(c.type, sw.value("switch").toString());
     }
-    void buildGuard() {
-        auto l = qobject_cast<QVBoxLayout *>(panels[2]->layout());
+    void buildGuard(QVBoxLayout *l) {
         guardMaster = new QComboBox;
         guardMaster->setObjectName("guardMaster");
         guardMaster->addItems({QStringLiteral("周榜"), QStringLiteral("月榜"), QStringLiteral("陪伴榜")});
@@ -1004,6 +1189,8 @@ void FloatingWindows::shutdown() {
     }
     if (d->giftWindow)
         d->giftWindow->hide();
+    if (d->entryDialog)
+        d->entryDialog->close();
     d->settings.sync();
 }
 } // namespace livehime

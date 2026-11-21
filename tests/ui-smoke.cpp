@@ -17,6 +17,8 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSlider>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -387,8 +389,9 @@ void obsStyledCoverGeometry()
             const auto checkLayout = [&] {
                 check(cover->height() == 190 && cover->minimumHeight() == 190 && cover->maximumHeight() == 190,
                       "OBS button stylesheet cannot shrink or displace cover preview");
-                check(dock.contentsRect().contains(cover->geometry()), "cover preview stays within dock bounds");
-                for (auto *widget : dock.findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly))
+                const QRect bounds(cover->mapTo(&dock, QPoint()), cover->size());
+                check(dock.contentsRect().contains(bounds), "cover preview stays within dock bounds");
+                for (auto *widget : cover->parentWidget()->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly))
                     if (widget != cover && widget->isVisible())
                         check(!cover->geometry().intersects(widget->geometry()),
                               "styled cover preview does not overlap neighboring controls");
@@ -398,6 +401,18 @@ void obsStyledCoverGeometry()
             dock.resize(600, 850);
             drain();
             checkLayout();
+            auto *scroll = dock.findChild<QScrollArea *>();
+            auto *last = child<QPushButton>(dock, "realtime-unlock-interaction");
+            check(scroll && scroll->verticalScrollBar()->maximum() == 0, "tall room panel fits without scrolling");
+            dock.resize(480, 140);
+            drain();
+            check(dock.height() == 140 && scroll && scroll->verticalScrollBar()->maximum() > 0,
+                  "room panel can shrink below the cover height");
+            if (scroll && last) {
+                scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+                check(scroll->viewport()->rect().contains(last->mapTo(scroll->viewport(), last->rect().bottomLeft())),
+                      "bottom room control stays reachable in a short dock");
+            }
         }
     }
     qApp->setStyleSheet(oldStyle);

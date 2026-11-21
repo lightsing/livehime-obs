@@ -164,7 +164,7 @@ std::optional<ApiError> BiliClient::sessionError() const
 }
 
 QNetworkReply *BiliClient::send(const protocol::Request &draft, Callback<QJsonObject> callback,
-                      QHttpMultiPart *multipart, bool web)
+                      QHttpMultiPart *multipart, bool web, bool requireMessage)
 {
     if (!protocol::isApiUrl(draft.url) || (draft.method != "GET" && draft.method != "POST")) {
         delete multipart;
@@ -208,7 +208,7 @@ QNetworkReply *BiliClient::send(const protocol::Request &draft, Callback<QJsonOb
         if (state->bytes.size() > MaxResponseBytes) { state->oversized = true; reply->abort(); }
     });
     connect(reply, &QNetworkReply::finished, this,
-        [this, reply, deadline, state, generation, mutation, callback = std::move(callback)]() mutable {
+        [this, reply, deadline, state, generation, mutation, requireMessage, callback = std::move(callback)]() mutable {
         pending_.remove(reply);
         deadline->stop();
         reply->deleteLater();
@@ -240,7 +240,7 @@ QNetworkReply *BiliClient::send(const protocol::Request &draft, Callback<QJsonOb
             fail(ApiError::Kind::InvalidResponse, QStringLiteral("服务器响应超过大小限制。"), mutation);
             return;
         }
-        auto result = protocol::envelope(state->bytes);
+        auto result = protocol::envelope(state->bytes, requireMessage);
         if (auto *error = std::get_if<ApiError>(&result)) {
             error->httpStatus = status;
             if (error->kind == ApiError::Kind::InvalidResponse) error->outcomeUnknown = mutation;
@@ -255,6 +255,19 @@ QNetworkReply *BiliClient::send(const protocol::Request &draft, Callback<QJsonOb
     return reply;
 }
 
+QNetworkReply *BiliClient::sendDanmaku(qint64 roomId, const QString &text, Callback<Done> callback)
+{
+    if (const auto error = sessionError()) { callback(*error); return nullptr; }
+    if (roomId <= 0 || !protocol::validDanmakuText(text)) {
+        callback(inputError(QStringLiteral("请选择有效房间并输入单行弹幕。")));
+        return nullptr;
+    }
+    return send(protocol::sendDanmaku(roomId, text, csrf(), QDateTime::currentDateTimeUtc()),
+                [callback = std::move(callback)](Result<QJsonObject> result) {
+                    if (const auto *error = std::get_if<ApiError>(&result)) callback(*error);
+                    else callback(Done{});
+                }, nullptr, false, true);
+}
 QNetworkReply *BiliClient::fetchRealtime(const protocol::Request &request, Callback<QJsonObject> callback)
 {
     if (const auto error = sessionError()) { callback(*error); return nullptr; }

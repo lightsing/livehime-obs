@@ -108,6 +108,8 @@ chinesesimp.InstallModesConflict=检测到两种模式的安装记录。请分�
 english.InstallModesConflict=Installation records exist in both modes. Remove them with their original uninstallers before running the shared installer again.
 chinesesimp.DuplicatePlugin=发现旧版或另一份活动的同名插件：%1。请先卸载旧版或移走该副本，再重试。安装器不会删除该副本。
 english.DuplicatePlugin=An old or another active copy of this plugin was found at %1. Uninstall the old version or move that copy before retrying. Setup will not delete it.
+chinesesimp.ZipChanged=原 ZIP 安装中的插件或更新助手已被移动。请退出安装器，在 OBS 中重新检查更新。
+english.ZipChanged=The plugin or update helper from the original ZIP installation was moved. Exit Setup and check for updates again in OBS.
 chinesesimp.InstallStateMissing=无法读取本安装的 OBS 目录记录。请先在同一插件目录重新运行安装器修复，再尝试卸载。
 english.InstallStateMissing=This installation's OBS directory record could not be read. Repair it by running Setup in the same bundle directory before uninstalling.
 
@@ -135,6 +137,7 @@ const
 var
   ObsDirectoryPage: TInputDirWizardPage;
   InstallationLayout, RegisteredRoot, RegisteredHost: String;
+  AdoptingLegacyZip: Boolean;
 
 function GetBinaryTypeW(FileName: String; var BinaryType: Cardinal): Boolean;
   external 'GetBinaryTypeW@kernel32.dll stdcall';
@@ -162,9 +165,15 @@ begin
     if not RegQueryStringValue(RootKey, PluginUninstallKey, 'InstallLocation', Result) then Result := '';
 end;
 
+function HasLegacyUpdateFiles(const Root: String): Boolean;
+begin
+  Result := FileExists(AddBackslash(Root) + 'obs-plugins\64bit\livehime-obs.dll') and
+    FileExists(AddBackslash(Root) + 'data\obs-plugins\livehime-obs\livehime-update-helper.exe');
+end;
+
 function ConfigureExistingInstallation(): String;
 var
-  PreviousLayout, PreviousBundle, StatePath, StateHost: String;
+  PreviousLayout, PreviousBundle, StatePath, StateHost, ExplicitDir, ExplicitHost: String;
   Registered: Boolean;
 begin
   Result := '';
@@ -173,7 +182,17 @@ begin
   InstallationLayout := ModernInstallLayout;
   if IsAdminInstallMode then Registered := RegKeyExists(HKLM64, PluginUninstallKey)
   else Registered := RegKeyExists(HKCU, PluginUninstallKey);
-  if not Registered then Exit;
+  if not Registered then begin
+    ExplicitDir := ExpandConstant('{param:DIR|}');
+    ExplicitHost := ExpandConstant('{param:OBSDIR|}');
+    if (ExplicitDir <> '') and (ExplicitHost <> '') and
+      (NormalizedPath(ExplicitDir) = NormalizedPath(ExplicitHost)) and HasLegacyUpdateFiles(ExplicitDir) then begin
+      RegisteredRoot := RemoveBackslashUnlessRoot(ExpandFileName(ExplicitDir));
+      InstallationLayout := LegacyInstallLayout;
+      AdoptingLegacyZip := True;
+    end;
+    Exit;
+  end;
   if RegisteredRoot = '' then begin Result := CustomMessage('InstallStateMissing'); Exit; end;
   PreviousLayout := GetPreviousData('InstallLayout', '');
   PreviousBundle := GetPreviousData('BundleRoot', '');
@@ -446,8 +465,8 @@ end;
 function BundleLocationError(const BundleRoot: String): String;
 begin
   Result := '';
-  if IsLegacyLayout() then Exit;
-  if Lowercase(ExtractFileName(RemoveBackslashUnlessRoot(BundleRoot))) <> 'livehime-obs' then begin
+  if IsLegacyLayout() and not AdoptingLegacyZip then Exit;
+  if IsModernLayout() and (Lowercase(ExtractFileName(RemoveBackslashUnlessRoot(BundleRoot))) <> 'livehime-obs') then begin
     Result := CustomMessage('WrongBundleName');
     Exit;
   end;
@@ -511,6 +530,10 @@ begin
   end;
   if IsLegacyLayout() and (NormalizedPath(ObsRoot) <> NormalizedPath(BundleRoot)) then begin
     Result := FmtMessage(CustomMessage('TargetChanged'), [RegisteredRoot]);
+    Exit;
+  end;
+  if AdoptingLegacyZip and not HasLegacyUpdateFiles(BundleRoot) then begin
+    Result := CustomMessage('ZipChanged');
     Exit;
   end;
   Result := HostCompatibilityError(ObsRoot);

@@ -192,6 +192,29 @@ Request danmuInfo(qint64 roomId, qint64 now)
     p["is_anchor"] = "true";
     return {"GET", withQuery(QString::fromLatin1(LiveApi) + "/xlive/app-room/v1/index/getDanmuInfo", signedParams(p)), {}, serialize(p)};
 }
+bool validDanmakuText(const QString &text)
+{
+    return !text.trimmed().isEmpty() && text.isValidUtf16() &&
+           std::none_of(text.cbegin(), text.cend(), [](QChar c) {
+               return c.category() == QChar::Other_Control || c == QChar::LineSeparator ||
+                      c == QChar::ParagraphSeparator;
+           });
+}
+Request sendDanmaku(qint64 roomId, const QString &text, const QByteArray &csrf, const QDateTime &sentAt)
+{
+    auto p = common(sentAt.toSecsSinceEpoch());
+    p.erase("build"); // Danmaku HTTP wrappers use their own common parameter set.
+    p["cid"] = QByteArray::number(roomId);
+    p["msg"] = text.toUtf8();
+    p["rnd"] = QByteArray::number(sentAt.toMSecsSinceEpoch());
+    p["fontsize"] = "25";
+    p["color"] = "1";
+    p["mode"] = "1";
+    auto body = signedParams(p);
+    addCsrf(body, csrf);
+    return {"POST", QUrl(QString::fromLatin1(LiveApi) + "/xlive/app-room/v1/dM/sendmsg"),
+            serialize(body), serialize(p)};
+}
 Request contributionRank(qint64 uid, qint64 roomId, const QString &type, const QString &sort, qint64 now)
 {
     auto p = common(now);
@@ -330,7 +353,7 @@ ApiError transportFailure(int networkCode, int httpStatus, bool timedOut, bool t
                          .arg(networkCode).arg(QString::fromLatin1(name ? name : "UnknownEnum")).arg(httpStatus);
     return error;
 }
-Result<QJsonObject> envelope(const QByteArray &json)
+Result<QJsonObject> envelope(const QByteArray &json, bool requireMessage)
 {
     QJsonParseError parseError;
     const auto document = QJsonDocument::fromJson(json, &parseError);
@@ -355,6 +378,8 @@ Result<QJsonObject> envelope(const QByteArray &json)
         error.verificationUrl = safeUserUrl(data.value(QStringLiteral("url")).toString());
         return error;
     }
+    if (requireMessage && !object.value(QStringLiteral("message")).isString())
+        return invalid(QStringLiteral("弹幕响应缺少有效的消息字段。"));
     // Successful writes may have null data; typed read parsers require their fields.
     return data;
 }

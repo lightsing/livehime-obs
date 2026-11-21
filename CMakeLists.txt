@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(livehime-obs VERSION 0.2.4 LANGUAGES C CXX)
+project(livehime-obs VERSION 0.4.0 LANGUAGES C CXX)
 
 include(cmake/ObsSdk.cmake)
 set(CMAKE_CXX_STANDARD 20)
@@ -46,7 +46,7 @@ add_library(livehime-obs MODULE ${plugin_sources})
 target_include_directories(livehime-obs PRIVATE src "${WEBVIEW2_ROOT}/build/native/include")
 target_link_libraries(livehime-obs PRIVATE OBS::libobs OBS::frontend-api
   zlibstatic brotlidec brotlicommon
-  Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network "${WEBVIEW2_LOADER}" crypt32 ole32 shell32 user32 shlwapi)
+  Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network "${WEBVIEW2_LOADER}" crypt32 bcrypt ole32 shell32 user32 shlwapi)
 target_compile_definitions(livehime-obs PRIVATE
   UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
   PLUGIN_VERSION="${PROJECT_VERSION}" LIVEHIME_OBS_VERSION="${PROJECT_VERSION}")
@@ -55,6 +55,15 @@ target_include_directories(livehime-obs PRIVATE "${GOIM_DEPS}/zlib-1.4" "${CMAKE
 set_target_properties(livehime-obs PROPERTIES PREFIX "" OUTPUT_NAME "livehime-obs")
 
 install(TARGETS livehime-obs RUNTIME DESTINATION obs-plugins/64bit LIBRARY DESTINATION obs-plugins/64bit)
+function(add_update_helper target)
+  add_executable(${target} WIN32 updater/update-helper.cpp)
+  set_target_properties(${target} PROPERTIES AUTOMOC OFF MSVC_RUNTIME_LIBRARY MultiThreaded)
+  target_compile_definitions(${target} PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /EHsc)
+  target_link_libraries(${target} PRIVATE bcrypt shell32 ole32 user32)
+endfunction()
+add_update_helper(livehime-update-helper)
+install(TARGETS livehime-update-helper RUNTIME DESTINATION data/obs-plugins/livehime-obs)
 install(DIRECTORY data/ DESTINATION data/obs-plugins/livehime-obs)
 set(LIVEHIME_SCHANNEL_BACKEND "${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins/tls/qschannelbackend.dll")
 file(SHA256 "${LIVEHIME_SCHANNEL_BACKEND}" schannel_sha256)
@@ -138,6 +147,36 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native-stream-con
     ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QPA_PLATFORM_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins/platforms;QT_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins")
 endif()
 
+if(BUILD_TESTING)
+  add_update_helper(update-helper-fixture)
+  target_compile_definitions(update-helper-fixture PRIVATE LIVEHIME_UPDATE_TEST_FIXTURE)
+  add_test(NAME update-after-obs-exit COMMAND pwsh -NoProfile -File
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-update-helper.ps1" -HelperPath "$<TARGET_FILE:update-helper-fixture>")
+  set_tests_properties(update-after-obs-exit PROPERTIES TIMEOUT 90)
+  add_executable(npm-signature-test tests/npm-signature-test.cpp src/npm-signature.cpp)
+  target_include_directories(npm-signature-test PRIVATE src)
+  target_link_libraries(npm-signature-test PRIVATE Qt6::Core bcrypt crypt32)
+  add_test(NAME npm-registry-signature COMMAND npm-signature-test)
+  add_executable(plugin-updater-test tests/plugin-updater-test.cpp src/plugin-updater.cpp src/update-package.cpp src/npm-signature.cpp)
+  target_include_directories(plugin-updater-test PRIVATE src "${GOIM_DEPS}/zlib-1.4" "${CMAKE_BINARY_DIR}/goim-zlib")
+  target_link_libraries(plugin-updater-test PRIVATE Qt6::Core Qt6::Network zlibstatic bcrypt crypt32)
+  add_test(NAME npm-plugin-updater COMMAND plugin-updater-test)
+  add_executable(update-controller-test tests/update-controller-test.cpp src/update-controller.cpp
+    src/update-controller.hpp src/plugin-updater.hpp)
+  target_include_directories(update-controller-test PRIVATE src)
+  target_link_libraries(update-controller-test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
+  target_compile_definitions(update-controller-test PRIVATE LIVEHIME_OBS_VERSION="${PROJECT_VERSION}")
+  add_test(NAME update-preferences COMMAND update-controller-test)
+  set_tests_properties(update-preferences PROPERTIES TIMEOUT 30
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit"
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QPA_PLATFORM_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins/platforms;QT_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins")
+  foreach(target IN ITEMS npm-signature-test plugin-updater-test update-controller-test)
+    target_compile_definitions(${target} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /EHsc)
+  endforeach()
+  set_tests_properties(npm-registry-signature npm-plugin-updater PROPERTIES TIMEOUT 40
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit")
+endif()
 get_property(livehime_tests DIRECTORY PROPERTY TESTS)
 if(BUILD_TESTING)
   add_executable(goim-test tests/goim-test.cpp src/goim-codec.cpp src/goim-codec.hpp src/goim-client.cpp src/goim-client.hpp src/gift-v2.cpp src/gift-v2.hpp)
@@ -148,6 +187,7 @@ if(BUILD_TESTING)
   add_test(NAME goim-codec-and-tcp COMMAND goim-test)
   set_tests_properties(goim-codec-and-tcp PROPERTIES TIMEOUT 60 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit")
   add_executable(realtime-state-test tests/realtime-state-test.cpp src/room-realtime.cpp src/room-realtime.hpp
+    src/room-interaction.cpp src/room-interaction.hpp
     src/moderation-notice.cpp src/moderation-notice.hpp
     src/live-controller.cpp src/live-controller.hpp src/session-store.cpp src/session-store.hpp src/bili-client.hpp src/obs-bridge.hpp
     src/protocol.cpp src/protocol.hpp src/goim-client.cpp src/goim-client.hpp src/goim-codec.cpp src/goim-codec.hpp src/gift-v2.cpp src/gift-v2.hpp)

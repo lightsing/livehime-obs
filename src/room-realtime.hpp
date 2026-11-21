@@ -4,10 +4,17 @@
 #include <QJsonArray>
 #include <QNetworkReply>
 #include <QPointer>
+#include <QSet>
 #include <QTimer>
 
 namespace livehime {
 class GoimClient;
+struct RoomEntry {
+    QString name;
+    qint64 timestamp = 0;
+    QString messageId;
+    qint64 sequence = 0;
+};
 // One account/room context shared by all windows. Never controls OBS output.
 class RoomRealtime final : public QObject {
     Q_OBJECT
@@ -17,6 +24,9 @@ class RoomRealtime final : public QObject {
     void setVisible(int kind, bool visible); // 0 interaction, 1 audience, 2 guard
     void selectAudience(const QString &type, const QString &sort);
     void selectGuard(int typ);
+    bool canSendDanmaku() const { return !stopped_ && uid_ > 0 && roomId_ > 0; }
+    bool sendingDanmaku() const { return sendingDanmaku_; }
+    void sendDanmaku(const QString &text);
     void refreshAudience();
     void refreshGuard();
     void loadMoreGuard();
@@ -29,11 +39,14 @@ class RoomRealtime final : public QObject {
     QString guardStatus() const { return guardStatus_; }
     bool guardHasMore() const { return guardHasMore_; }
     quint64 contextEpoch() const { return contextEpoch_; }
+    const QList<RoomEntry> &entryHistory() const { return entryHistory_; }
   signals:
     void events(const QJsonArray &batch);
+    void entryHistoryChanged();
     void moderationNotice(const ModerationNotice &notice);
     void contextChanged();
     void stopped();
+    void danmakuSendFinished(bool accepted, const QString &message);
     void rankConfigChanged();
     void statusChanged(const QString &status);
     void audienceChanged();
@@ -48,6 +61,8 @@ class RoomRealtime final : public QObject {
     QPointer<LiveController> controller_;
     GoimClient *goim_;
     QTimer refreshTimer_, retryTimer_;
+    bool sendingDanmaku_ = false;
+    QPointer<QNetworkReply> sendReply_;
     QPointer<QNetworkReply> configReply_, audienceReply_, guardReply_;
     quint64 accountEpoch_ = ~quint64(0), contextEpoch_ = 0, audienceEpoch_ = 0, guardEpoch_ = 0;
     qint64 uid_ = 0, roomId_ = 0;
@@ -58,6 +73,8 @@ class RoomRealtime final : public QObject {
     QJsonObject audience_, guard_;
     QJsonObject rankConfig_;
     QJsonArray endpoints_;
+    QList<RoomEntry> entryHistory_;
+    QSet<QString> entryIds_;
     QString connectionToken_;
     int endpointIndex_ = 0;
     int guardTyp_ = 4, guardPage_ = 0;

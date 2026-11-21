@@ -89,6 +89,22 @@ void protocolVectors()
             check(request.clientTraceId.isEmpty(), "title and stop omit start event trace");
         }
     }
+    const auto text = QStringLiteral("主播 & 观众 😀");
+    const auto danmaku = p::sendDanmaku(12345, text, "synthetic-csrf", startedAt);
+    auto fields = p::common(startedAt.toSecsSinceEpoch());
+    fields.erase("build");
+    fields.insert({{"cid", "12345"}, {"msg", text.toUtf8()}, {"rnd", "1700000000123"},
+                   {"fontsize", "25"}, {"color", "1"}, {"mode", "1"}});
+    check(danmaku.method == "POST" && danmaku.url == QUrl("https://api.live.bilibili.com/xlive/app-room/v1/dM/sendmsg") &&
+          danmaku.signedBytes == p::serialize(fields), "ordinary native danmaku signed fields and timestamp units");
+    fields["sign"] = p::signature(fields);
+    fields["csrf"] = fields["csrf_token"] = "synthetic-csrf";
+    check(danmaku.body == p::serialize(fields), "native danmaku encodes text and appends CSRF after signature");
+    check(p::validDanmakuText(text) && !p::validDanmakuText("  ") && !p::validDanmakuText("a\nb") &&
+          !p::validDanmakuText(QString(QChar(0xd800))), "validate single-line Unicode danmaku");
+    check(errorKind(p::envelope(R"({"code":0})", true), ApiError::Kind::InvalidResponse) &&
+          std::holds_alternative<QJsonObject>(p::envelope(R"({"code":0,"message":"OK"})", true)),
+          "danmaku acknowledgement requires both code and message");
     bool refused = false;
     try { (void)p::signature({{"sign", "old"}}); } catch (const std::invalid_argument &) { refused = true; }
     check(refused, "refuse signing already signed inputs");

@@ -58,14 +58,17 @@ if ($FixtureIdentity) {
 $pluginData = 'data'
 $manifestRelative = "$pluginData/install-manifest.json"
 $uninstallerRelative = 'installer/unins000.exe'
+$legacyData = 'data/obs-plugins/livehime-obs'
 $runtimePaths = @(
     'livehime-obs.dll',
+    "$pluginData/livehime-update-helper.exe",
     "$pluginData/locale/en-US.ini",
     "$pluginData/locale/zh-CN.ini",
     "$pluginData/qt-plugins/tls/qschannelbackend.dll"
 )
 $zipPathMap = @{
     'livehime-obs.dll' = 'obs-plugins/64bit/livehime-obs.dll'
+    'data/livehime-update-helper.exe' = 'data/obs-plugins/livehime-obs/livehime-update-helper.exe'
     'data/locale/en-US.ini' = 'data/obs-plugins/livehime-obs/locale/en-US.ini'
     'data/locale/zh-CN.ini' = 'data/obs-plugins/livehime-obs/locale/zh-CN.ini'
     'data/qt-plugins/tls/qschannelbackend.dll' = 'data/obs-plugins/livehime-obs/qt-plugins/tls/qschannelbackend.dll'
@@ -185,16 +188,19 @@ function Invoke-Case([string]$Name, [scriptblock]$Body) {
     }
 }
 
-function Invoke-Package($Fixture, [string]$Label, [switch]$Uninstall) {
+function Invoke-Package($Fixture, [string]$Label, [switch]$Uninstall, [switch]$DefaultBundle, [switch]$Legacy) {
     $Root = $Fixture.root
     $script:invocationNumber++
     $log = Join-Path $logsRoot ('{0:D2}-{1}.log' -f $script:invocationNumber, $Label)
-    $executable = if ($Uninstall) { Get-FixturePath $Root $uninstallerRelative } else { $InstallerPath }
+    $executable = if (!$Uninstall) { $InstallerPath }
+        elseif ($Legacy) { Get-FixturePath $Root "$legacyData/$uninstallerRelative" }
+        else { Get-FixturePath $Root $uninstallerRelative }
     Assert-True (Test-Path -LiteralPath $executable -PathType Leaf) "Missing executable: $executable"
     $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"")
     if (!$Uninstall) {
         $arguments += @('/CURRENTUSER', '/SP-', '/LANG=english', '/NOCLOSEAPPLICATIONS',
-                        '/NORESTARTAPPLICATIONS', "/DIR=`"$Root`"", "/OBSDIR=`"$($Fixture.host.root)`"")
+                        '/NORESTARTAPPLICATIONS', "/OBSDIR=`"$($Fixture.host.root)`"")
+        if (!$DefaultBundle) { $arguments += "/DIR=`"$Root`"" }
     }
     $process = Start-Process -FilePath $executable -ArgumentList $arguments -PassThru -WindowStyle Hidden
     if (!$process.WaitForExit($InstallerTimeoutSeconds * 1000)) {
@@ -388,7 +394,7 @@ function Assert-Installed($Fixture) {
     return @($ownedFiles.Keys) + @($manifestRelative, $uninstallerRelative, 'installer/unins000.dat', 'data/install-state.ini')
 }
 
-function Assert-Uninstalled($Fixture, [string[]]$OwnedFiles) {
+function Assert-Uninstalled($Fixture, [string[]]$OwnedFiles, [switch]$Legacy) {
     # Inno's uninstall process can return before its helper deletes unins*.
     # Wait only for owned files; the strict assertions below still identify
     # the exact residue on timeout and verify registration and sentinels.
@@ -406,15 +412,17 @@ function Assert-Uninstalled($Fixture, [string[]]$OwnedFiles) {
     Assert-True (!(Get-UninstallRecord CurrentUser Registry64).exists) 'Uninstall registration remains after uninstall.'
     Assert-Sentinels $Fixture
     Assert-Sentinels $Fixture.host
-    Assert-True ((Get-TreeSnapshot $Fixture.host.root) -ceq $Fixture.hostSnapshot) 'Uninstall changed the selected OBS host.'
+    if (!$Legacy) {
+        Assert-True ((Get-TreeSnapshot $Fixture.host.root) -ceq $Fixture.hostSnapshot) 'Uninstall changed the selected OBS host.'
+    }
     Assert-RegistryIsolation
 }
 
-function Assert-RejectedInstall($Fixture, [string]$Label, [string]$ExpectedMessage = '') {
+function Assert-RejectedInstall($Fixture, [string]$Label, [string]$ExpectedMessage = '', [switch]$DefaultBundle) {
     $before = Get-TreeSnapshot $Fixture.root
     $hostBefore = Get-TreeSnapshot $Fixture.host.root
     $registryBefore = ConvertTo-StableJson (Get-UninstallRecord CurrentUser Registry64)
-    Assert-True ((Invoke-Package $Fixture $Label) -ne 0) "Installer accepted the invalid/busy target: $Label"
+    Assert-True ((Invoke-Package $Fixture $Label -DefaultBundle:$DefaultBundle) -ne 0) "Installer accepted the invalid/busy target: $Label"
     Assert-True ((Get-TreeSnapshot $Fixture.root) -ceq $before) "Rejected installation changed its target: $Label"
     Assert-True ((Get-TreeSnapshot $Fixture.host.root) -ceq $hostBefore) "Rejected installation changed its selected host: $Label"
     Assert-True ((ConvertTo-StableJson (Get-UninstallRecord CurrentUser Registry64)) -ceq $registryBefore) `
@@ -497,8 +505,46 @@ try {
             New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($path)) | Out-Null
             [IO.File]::WriteAllBytes($path, $zipPayload[$relative].bytes)
         }
-        Assert-RejectedInstall $legacy 'legacy-zip-duplicate'
+        Assert-RejectedInstall $legacy 'legacy-zip-duplicate' 'another active copy'
         Assert-Sentinels $legacy.host
+    }
+    $inPlace = [pscustomobject]@{ root = $legacy.host.root; host = $legacy.host; sentinels = $legacy.host.sentinels }
+    Invoke-Case 'keep an unregistered ZIP intact when Setup uses its default bundle' {
+        $sharedRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+        $default = [pscustomobject]@{ root = Join-Path $sharedRoot 'obs-studio/plugins/livehime-obs'; host = $legacy.host }
+        Assert-RejectedInstall $default 'legacy-zip-default-bundle' -DefaultBundle
+    }
+    Invoke-Case 'require the ZIP update helper before accepting an explicit OBS-root update' {
+        $helperPath = Get-FixturePath $inPlace.root $zipPathMap['data/livehime-update-helper.exe']
+        Remove-Item -LiteralPath $helperPath
+        Assert-RejectedInstall $inPlace 'legacy-zip-no-helper'
+        [IO.File]::WriteAllText($helperPath, 'OLD synthetic update helper')
+    }
+    Invoke-Case 'replace the original ZIP in its explicit OBS root and preserve unrelated files' {
+        $oldDll = Get-FixturePath $inPlace.root $zipPathMap['livehime-obs.dll']
+        [IO.File]::WriteAllText($oldDll, 'OLD synthetic plugin')
+        $noteRelative = "$legacyData/user-added-note.txt"
+        $note = Get-FixturePath $inPlace.root $noteRelative
+        [IO.File]::WriteAllText($note, 'SYNTHETIC user file inside plugin data')
+        $inPlace.sentinels[$noteRelative] = Get-Sha256 $note
+        Assert-True ((Invoke-Package $inPlace 'legacy-zip-adopt') -eq 0) 'Explicit in-place ZIP update failed.'
+        $record = Get-UninstallRecord CurrentUser Registry64
+        Assert-True ($record.values['Inno Setup CodeFile: InstallLayout'].value -eq 'legacy-root-v1') 'Wrong adopted layout.'
+        Assert-True ($record.values['Inno Setup CodeFile: ObsRoot'].value -eq $inPlace.root) 'Adopted host registration moved.'
+        Assert-True ([IO.Path]::TrimEndingDirectorySeparator($record.values['InstallLocation'].value) -eq $inPlace.root) 'Adopted install root moved.'
+        $manifest = Get-Content -LiteralPath (Get-FixturePath $inPlace.root "$legacyData/install-manifest.json") -Raw | ConvertFrom-Json
+        Assert-True ($manifest.schema -eq 1) 'The ZIP update used the wrong manifest.'
+        foreach ($relative in $runtimePaths) {
+            $zipRelative = $zipPathMap[$relative]
+            Assert-True ($zipRelative -cin $manifest.files.path) "Missing legacy manifest entry: $zipRelative"
+            Assert-True ((Get-Sha256 (Get-FixturePath $inPlace.root $zipRelative)) -ceq $zipPayload[$relative].sha256) "Legacy ZIP payload mismatch: $zipRelative"
+        }
+        Assert-Sentinels $inPlace.host
+        Assert-RegistryIsolation
+        $ownedFiles = @($manifest.files.path) + @("$legacyData/install-manifest.json", "$legacyData/install-state.ini",
+            "$legacyData/$uninstallerRelative", "$legacyData/installer/unins000.dat")
+        Assert-True ((Invoke-Package $inPlace 'legacy-zip-uninstall' -Uninstall -Legacy) -eq 0) 'Adopted ZIP uninstall failed.'
+        Assert-Uninstalled $inPlace $ownedFiles -Legacy
     }
     Invoke-Case 'reject nested binary layout inside the selected bundle' {
         $nested = New-BundleFixture 'nested-binary-duplicate' (New-ObsFixture 'nested-binary-host' $validHost $validQt)

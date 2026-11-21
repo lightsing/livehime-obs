@@ -10,6 +10,7 @@ class QLineEdit;
 class QPushButton;
 class QComboBox;
 class QResizeEvent;
+class QVBoxLayout;
 
 namespace livehime {
 class LoginDialog;
@@ -22,6 +23,7 @@ class RoomDock final : public QWidget {
     explicit RoomDock(LiveController *controller, QWidget *parent = nullptr);
     bool attachNativeControls(QWidget *mainWindow, QString *error);
     void setRealtimeAvailable(bool available);
+    void addUpdateControls(QWidget *controls);
   signals:
     void openRealtimeWindow(int kind);
     void unlockRealtimeInteraction();
@@ -44,6 +46,7 @@ class RoomDock final : public QWidget {
     int selectedAreaId() const;
     LiveController *controller_;
     NativeStreamControls *nativeControls_;
+    QVBoxLayout *contentLayout_;
     QLabel *account_;
     QLabel *roomLabel_;
     QLabel *status_;

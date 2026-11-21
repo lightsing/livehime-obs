@@ -73,6 +73,8 @@ Request stop(qint64 roomId, const QByteArray &csrf, qint64 timestampSeconds);
 Request room(qint64 uid, qint64 timestampSeconds);
 Request preLive(qint64 timestampSeconds);
 Request danmuInfo(qint64 roomId, qint64 timestampSeconds);
+bool validDanmakuText(const QString &text);
+Request sendDanmaku(qint64 roomId, const QString &text, const QByteArray &csrf, const QDateTime &sentAt);
 Request contributionRank(qint64 uid, qint64 roomId, const QString &type, const QString &sort, qint64 timestampSeconds);
 Request guardRank(qint64 uid, qint64 roomId, int typ, int page, qint64 timestampSeconds);
 Request cover(const QUrl &location, const QByteArray &csrf, const QByteArray &visitId);
@@ -88,7 +90,7 @@ bool cookieMatches(const QNetworkCookie &cookie, const QUrl &url);
 QUrl safeUserUrl(const QString &value);
 ApiError transportFailure(int networkCode, int httpStatus, bool timedOut, bool tlsAvailable,
                           bool mutation);
-Result<QJsonObject> envelope(const QByteArray &json);
+Result<QJsonObject> envelope(const QByteArray &json, bool requireMessage = false);
 Result<UserInfo> parseUser(const QJsonObject &data);
 Result<QList<AreaInfo>> parseAreas(const QByteArray &json);
 Result<RoomInfo> parseRoom(const QJsonObject &data);

@@ -1,12 +1,12 @@
 #include "gift-v2.hpp"
+#include "protobuf-reader.hpp"
 #include <QJsonDocument>
 #include <QSet>
 #include <QStringDecoder>
 #include <limits>
 namespace livehime {
 namespace {
-constexpr qsizetype MaxPayload = 256 * 1024;
-constexpr int MaxFields = 4096, MaxGifts = 128, MaxDepth = 8;
+constexpr int MaxGifts = 128;
 enum class Schema { Root, Gift, User, Base, Anon, Medal, Material };
 struct Field {
     const char *name = nullptr;
@@ -123,79 +123,16 @@ Field field(Schema schema, quint32 id) {
     }
     return {};
 }
-struct Reader {
-    QByteArrayView bytes;
-    qsizetype offset = 0;
-    int &budget;
-    bool varint(quint64 &out) {
-        out = 0;
-        for (int i = 0; i < 10; ++i) {
-            if (offset == bytes.size())
-                return false;
-            const auto byte = static_cast<quint8>(bytes[offset++]);
-            if (i == 9 && byte > 1)
-                return false;
-            out |= quint64(byte & 127) << (i * 7);
-            if (!(byte & 128))
-                return true;
-        }
-        return false;
-    }
-    bool slice(QByteArrayView &out) {
-        quint64 length;
-        if (!varint(length) || length > quint64(bytes.size() - offset))
-            return false;
-        out = bytes.sliced(offset, static_cast<qsizetype>(length));
-        offset += static_cast<qsizetype>(length);
-        return true;
-    }
-    bool skip(quint32 wire, quint32 id, int depth) {
-        quint64 ignored;
-        QByteArrayView value;
-        switch (wire) {
-        case 0:
-            return varint(ignored);
-        case 1:
-            if (bytes.size() - offset < 8)
-                return false;
-            offset += 8;
-            return true;
-        case 2:
-            return slice(value);
-        case 5:
-            if (bytes.size() - offset < 4)
-                return false;
-            offset += 4;
-            return true;
-        case 3:
-            if (depth >= MaxDepth)
-                return false;
-            while (offset < bytes.size()) {
-                quint64 tag;
-                if (--budget < 0 || !varint(tag) || !(tag >> 3) || (tag >> 3) > 0x1fffffff)
-                    return false;
-                if ((tag & 7) == 4)
-                    return (tag >> 3) == id;
-                if (!skip(tag & 7, static_cast<quint32>(tag >> 3), depth + 1))
-                    return false;
-            }
-            return false;
-        default:
-            return false;
-        }
-    }
-};
 bool parse(QByteArrayView bytes, Schema schema, int depth, int &budget, QJsonObject &result) {
-    if (depth > MaxDepth)
+    if (depth > protobuf::MaxDepth)
         return false;
-    Reader reader{bytes, 0, budget};
+    protobuf::Reader reader{bytes, 0, budget};
     QSet<quint32> seen;
     QJsonArray gifts;
     while (reader.offset < bytes.size()) {
-        quint64 tag;
-        if (--budget < 0 || !reader.varint(tag) || !(tag >> 3) || (tag >> 3) > 0x1fffffff)
+        quint32 id, wire;
+        if (!reader.next(id, wire))
             return false;
-        const auto id = static_cast<quint32>(tag >> 3), wire = static_cast<quint32>(tag & 7);
         const auto spec = field(schema, id);
         if (!spec.name) {
             if (!reader.skip(wire, id, depth))
@@ -249,9 +186,9 @@ bool parse(QByteArrayView bytes, Schema schema, int depth, int &budget, QJsonObj
 }
 } // namespace
 QJsonArray decodeGiftV2Payload(const QByteArray &payload) {
-    if (payload.isEmpty() || payload.size() > MaxPayload)
+    if (payload.isEmpty() || payload.size() > protobuf::MaxPayload)
         return {};
-    int budget = MaxFields;
+    int budget = protobuf::MaxFields;
     QJsonObject root;
     if (!parse(payload, Schema::Root, 0, budget, root) || !root.value("switch").toBool())
         return {};
@@ -301,18 +238,6 @@ QJsonArray decodeGiftV2(const QJsonObject &event) {
     if (event.value("cmd").toString() != "SEND_GIFT_V2")
         return {};
     const auto value = event.value("data").toObject().value("pb");
-    if (!value.isString())
-        return {};
-    const auto text = value.toString();
-    if (text.isEmpty() || text.size() > ((MaxPayload + 2) / 3) * 4 || text.size() % 4)
-        return {};
-    for (const auto c : text)
-        if (c.unicode() > 127)
-            return {};
-    const auto encoded = text.toLatin1();
-    const auto decoded = QByteArray::fromBase64Encoding(encoded, QByteArray::AbortOnBase64DecodingErrors);
-    if (!decoded || decoded.decoded.toBase64() != encoded)
-        return {};
-    return decodeGiftV2Payload(decoded.decoded);
+    return decodeGiftV2Payload(protobuf::decodeBase64(value));
 }
 } // namespace livehime

@@ -25,7 +25,7 @@
       </nav>
       <div class="nav-actions">
         <a class="btn btn-ghost" href="https://github.com/lightsing/livehime-obs" target="_blank" rel="noopener">GitHub</a>
-        <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/tag/v0.2.4" target="_blank" rel="noopener">v0.2.4 发布页</a>
+        <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/tag/v0.4.0" target="_blank" rel="noopener">v0.4.0 发布页</a>
         <button class="nav-toggle" id="navToggle" type="button" aria-label="展开导航">菜单</button>
       </div>
     </div>
@@ -55,7 +55,7 @@
         <div class="section-header">
           <span class="section-tag">Architecture</span>
           <h2>开播状态机、协议对齐与安全隔离</h2>
-          <p>v0.2.4 适配直播姬 <strong>8.15.0.11311</strong> 协议特征，并在客户端会话、网络通道与 OBS 宿主运行库三个层面实施隔离。</p>
+          <p>当前版本沿用 v0.2.4 对直播姬 <strong>8.15.0.11311</strong> 的协议适配，并在客户端会话、网络通道与 OBS 宿主运行库三个层面实施隔离。</p>
         </div>
 
         <div class="steps-grid">
@@ -180,7 +180,7 @@ Set-Location livehime-obs
               </div>
               <pre id="techTestSnippet">.\scripts\build.ps1 -DependenciesRoot D:\path\to\deps -SkipBootstrap
 ctest --test-dir build -C RelWithDebInfo --output-on-failure
-.\scripts\test-installer.ps1 -InstallerPath dist\livehime-obs-0.2.4-windows-x64-setup.exe</pre>
+.\scripts\test-installer.ps1 -InstallerPath dist\livehime-obs-0.4.0-windows-x64-setup.exe</pre>
             </div>
           </div>
         </div>
@@ -192,17 +192,18 @@ ctest --test-dir build -C RelWithDebInfo --output-on-failure
         <div class="section-header">
           <span class="section-tag">Verification</span>
           <h2>自动化验证覆盖范围</h2>
-          <p>GitHub Actions（<code>.github/workflows/windows.yml</code>）在每次推送与发布 Tag 时执行完整构建、10 项 CTest 测试、DLL 加载核验与安装器矩阵测试。</p>
+          <p>GitHub Actions（<code>.github/workflows/windows.yml</code>）在每次推送与发布 Tag 时执行完整构建、14 项 CTest 测试、DLL 加载核验与安装器矩阵测试。</p>
         </div>
         <div class="notice-box">
           <div class="info-panel">
-            <h3>离线 CTest 套件（10 项）</h3>
+            <h3>离线 CTest 套件（14 项）</h3>
             <ul>
               <li><code>protocol-vectors</code>：转义排序签名向量、<code>client_traceid</code>、Cookie 范围与 RTMP 选择。</li>
               <li><code>session-store-roundtrip</code>：当前用户 DPAPI 加解密、损坏缓存拒绝与设备标识持久性。</li>
               <li><code>controller-state-transitions</code> &amp; <code>obs-bridge-lifecycle</code>：标题/封面并发保存、开停播时序、重连与异常回滚。</li>
               <li><code>ui-crop-smoke</code> &amp; <code>native-stream-controls</code>：4:3 裁切、双下拉搜索、原生按钮及延迟推流信号接管。</li>
               <li><code>goim-codec-and-tcp</code>、<code>gift-v2-wire-parser</code>、<code>realtime-state-isolation</code> &amp; <code>realtime-floating-windows</code>：TCP 分帧解压、Protobuf V2、停靠/穿透与超管弹窗。</li>
+              <li>自动更新测试覆盖 npm 签名、下载与缓存、更新偏好，以及所有 OBS 实例退出后再安装。</li>
             </ul>
           </div>
           <div class="info-panel warn">

@@ -85,7 +85,8 @@ jobs:
             $inventory | Set-Content -LiteralPath logs/ci/ctest-tests.json -Encoding utf8
             $testNames = @(($inventory | ConvertFrom-Json).tests.name)
             foreach ($required in @('protocol-vectors', 'session-store-roundtrip', 'controller-state-transitions',
-                                     'obs-bridge-lifecycle', 'ui-crop-smoke', 'native-stream-controls')) {
+                                     'obs-bridge-lifecycle', 'ui-crop-smoke', 'native-stream-controls',
+                                     'npm-registry-signature', 'npm-plugin-updater', 'update-preferences', 'update-after-obs-exit')) {
               if ($required -notin $testNames) { throw "Required CTest test is missing: $required" }
             }
           } finally { Stop-Transcript | Out-Null }
@@ -128,6 +129,19 @@ jobs:
               -PackagePath "dist/$env:PACKAGE_PREFIX.zip" -Workspace build/installer-validation
           } finally { Stop-Transcript | Out-Null }
 
+      - name: Build and verify npm installer tarball
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -B scripts/test_npm_package.py
+          if ($LASTEXITCODE -ne 0) { throw 'npm mirror tests failed.' }
+          python -B scripts/npm_package.py pack $env:PROJECT_VERSION `
+            "dist/lightsing-livehime-obs-win32-x64-$env:PROJECT_VERSION.tgz" --installer "dist/$env:PACKAGE_PREFIX-setup.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'npm package verification failed.' }
+          $env:PATH = (Join-Path $env:OBS_ROOT 'bin/64bit') + [IO.Path]::PathSeparator + $env:PATH
+          & ./build/RelWithDebInfo/plugin-updater-test.exe $env:PROJECT_VERSION `
+            "dist/lightsing-livehime-obs-win32-x64-$env:PROJECT_VERSION.tgz" "dist/$env:PACKAGE_PREFIX-setup.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'The plugin could not recover the exact release installer.' }
+
       - name: Prepare verified release assets and validation report
         run: |
           $ErrorActionPreference = 'Stop'
@@ -135,7 +149,7 @@ jobs:
           if ($reports.Count -ne 1) { throw 'Expected exactly one installer validation report.' }
           $installer = Get-Content -Raw -LiteralPath $reports[0].FullName | ConvertFrom-Json
           if (!$installer.passed -or $installer.retainedCurrentUserRegistration -or
-              @($installer.tests).Count -lt 28 -or @($installer.tests | Where-Object { !$_.passed }).Count -ne 0) {
+              @($installer.tests).Count -lt 31 -or @($installer.tests | Where-Object { !$_.passed }).Count -ne 0) {
             throw 'Installer validation is incomplete or failed.'
           }
           $prefix = $env:PACKAGE_PREFIX
@@ -148,7 +162,7 @@ jobs:
                                "$($recipeArchives[0]).sha256", 'qt-source-provenance.json', 'qt-source-provenance.json.sha256')
           if (@(Compare-Object $expectedSources $sourceNames).Count -ne 0) { throw 'Unexpected corresponding-source file list.' }
           $assetNames = @("$prefix.zip", "$prefix.zip.sha256", "$prefix-setup.exe",
-                          "$prefix-setup.exe.sha256", "$prefix-setup.exe.json") + $sourceNames
+                          "$prefix-setup.exe.sha256", "$prefix-setup.exe.json", "lightsing-livehime-obs-win32-x64-$env:PROJECT_VERSION.tgz") + $sourceNames
           $files = @($assetNames | ForEach-Object {
             $path = Join-Path dist $_
             if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing release asset: $path" }
@@ -179,6 +193,7 @@ jobs:
           $report = [ordered]@{
             schema = 1; version = $env:PROJECT_VERSION; commit = $commit; ref = $env:GITHUB_REF
             run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            runAttempt = [int]$env:GITHUB_RUN_ATTEMPT
             generatedAtUtc = [DateTime]::UtcNow.ToString('o'); runner = 'windows-2022'
             obsVersion = $lock.obsVersion; qtVersion = $lock.qtVersion
             ctest = [ordered]@{ passed = $true; count = @($ctest.tests).Count; tests = @($ctest.tests.name) }
@@ -206,6 +221,7 @@ jobs:
             dist/livehime-obs-${{ steps.version.outputs.version }}-windows-x64-setup.exe.sha256
             dist/livehime-obs-${{ steps.version.outputs.version }}-windows-x64-setup.exe.json
             dist/livehime-obs-${{ steps.version.outputs.version }}-windows-x64-validation.json
+            dist/lightsing-livehime-obs-win32-x64-${{ steps.version.outputs.version }}.tgz
             dist/qtbase-everywhere-src-*.zip
             dist/qtbase-everywhere-src-*.zip.sha256
             dist/obs-deps-*.zip
@@ -238,6 +254,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      actions: read
     env:
       RELEASE_VERSION: ${{ needs.build.outputs.version }}
     steps:
@@ -263,11 +280,11 @@ jobs:
           if ($qtArchive -cnotmatch '^qtbase-everywhere-src-\d+\.\d+\.\d+\.zip$' -or
               $recipesArchive -cnotmatch '^obs-deps-[0-9a-f]{40}\.zip$') { throw 'Invalid source archive names.' }
           $expected = @("$prefix.zip", "$prefix.zip.sha256", "$prefix-setup.exe",
-                        "$prefix-setup.exe.sha256", "$prefix-setup.exe.json", $qtArchive, "$qtArchive.sha256",
+                        "$prefix-setup.exe.sha256", "$prefix-setup.exe.json", "lightsing-livehime-obs-win32-x64-$env:RELEASE_VERSION.tgz", $qtArchive, "$qtArchive.sha256",
                         $recipesArchive, "$recipesArchive.sha256", 'qt-source-provenance.json', 'qt-source-provenance.json.sha256')
           if ($report.version -cne $env:RELEASE_VERSION -or $report.commit -cne $env:GITHUB_SHA -or
               !$report.ctest.passed -or !$report.dllLoad.passed -or !$report.installer.passed -or
-              $report.ctest.count -lt 6 -or $report.installer.count -lt 28 -or
+              $report.ctest.count -lt 14 -or $report.installer.count -lt 31 -or
               @($report.files).Count -ne $expected.Count) { throw 'Invalid release validation report.' }
           $actualNames = @(Get-ChildItem -LiteralPath release-assets -File | Select-Object -ExpandProperty Name)
           if (@(Compare-Object ($expected + $reportName) $actualNames).Count -ne 0) {
@@ -303,20 +320,151 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $remoteCommit.Trim() -cne $env:GITHUB_SHA) {
             throw 'The remote tag no longer points to the tested commit.'
           }
-          $assets = @(Get-ChildItem -LiteralPath release-assets -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
-          $existingJson = & gh release view $tag --repo $repository --json isDraft,assets 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            $existing = $existingJson | ConvertFrom-Json
-            if (!$existing.isDraft) { throw 'This release is already published; existing published assets are not overwritten.' }
-            $allowedNames = @($assets | ForEach-Object { [IO.Path]::GetFileName($_) })
-            if (@($existing.assets | Where-Object { $_.name -notin $allowedNames }).Count -ne 0) {
-              throw 'The existing draft contains other assets; review it before retrying.'
-            }
-            & gh release upload $tag @assets --repo $repository --clobber
-          } else {
-            & gh release create $tag @assets --repo $repository --verify-tag --draft `
-              --title "Livehime OBS $env:RELEASE_VERSION" --notes-file release-notes.md
+          $prefix = "livehime-obs-$env:RELEASE_VERSION-windows-x64"
+          $reportName = "$prefix-validation.json"
+          $root = 'release-assets'
+          $report = Get-Content -Raw -LiteralPath "$root/$reportName" | ConvertFrom-Json
+          function Get-TagRelease {
+            $releaseApi = & gh release view $tag --repo $repository --json apiUrl --jq .apiUrl
+            if ($LASTEXITCODE -ne 0) { throw 'Could not locate the tagged release.' }
+            $json = & gh api $releaseApi
+            if ($LASTEXITCODE -ne 0) { throw 'Could not read the release.' }
+            return $json | ConvertFrom-Json
           }
-          if ($LASTEXITCODE -ne 0) { throw 'Release asset upload failed; any created release remains a draft.' }
-          & gh release edit $tag --repo $repository --draft=false --notes-file release-notes.md
-          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the verified release draft.' }
+          function Get-Sha256([string]$file) {
+            return (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          & gh release view $tag --repo $repository --json tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            & gh release create $tag --repo $repository --verify-tag --draft `
+              --title "Livehime OBS $env:RELEASE_VERSION" --notes-file release-notes.md
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create the release draft.' }
+          }
+          $remote = Get-TagRelease
+          $reportHash = Get-Sha256 "$root/$reportName"
+          if ($reportName -cin $remote.assets.name) {
+            & gh release download $tag --repo $repository --dir original --pattern $reportName
+            if ($LASTEXITCODE -ne 0) { throw 'Could not retrieve the original validation report.' }
+            $original = Get-Content -Raw -LiteralPath "original/$reportName" | ConvertFrom-Json
+            if ($original.version -cne $report.version -or $original.commit -cne $report.commit -or
+                !$original.ctest.passed -or !$original.dllLoad.passed -or !$original.installer.passed -or
+                @(Compare-Object @($report.files.name) @($original.files.name)).Count -ne 0) {
+              throw 'Existing release does not belong to this validated commit and asset set.'
+            }
+            # Build timestamps may differ on a full rerun. The first report pins every original byte.
+            $report = $original
+            $reportHash = Get-Sha256 "original/$reportName"
+          } elseif (!$remote.draft -or $remote.assets.Count -ne 0) {
+            throw 'Existing release has no authoritative validation report.'
+          } else {
+            & gh release upload $tag "$root/$reportName" --repo $repository
+            if ($LASTEXITCODE -ne 0) { throw 'Could not pin the initial validation report.' }
+          }
+
+          function Test-ReleaseAssets($release) {
+            $allowed = @($report.files.name) + $reportName
+            foreach ($asset in $release.assets) {
+              if ($asset.name -cnotin $allowed) { throw "Unexpected release asset: $($asset.name)" }
+              if ($asset.name -ceq $reportName) {
+                if ($asset.digest -cne "sha256:$reportHash") { throw 'Pinned validation report changed.' }
+                continue
+              }
+              $rows = @($report.files | Where-Object name -CEQ $asset.name)
+              if ($rows.Count -ne 1 -or $asset.state -cne 'uploaded' -or
+                  $asset.digest -cne "sha256:$($rows[0].sha256)") { throw "Existing asset mismatch: $($asset.name)" }
+            }
+          }
+          $remote = Get-TagRelease
+          Test-ReleaseAssets $remote
+          $missing = @($report.files | Where-Object { $_.name -cnotin $remote.assets.name })
+          if ($missing.Count -gt 0) {
+            if (!$remote.draft) { throw 'Published GitHub Release is missing verified assets.' }
+            if (@($missing | Where-Object { (Get-Sha256 "$root/$($_.name)") -cne $_.sha256 }).Count -gt 0) {
+              $runBase = "$env:GITHUB_SERVER_URL/$repository/actions/runs/"
+              if (!$report.run.StartsWith($runBase) -or $report.run.Substring($runBase.Length) -notmatch '^\d+$' -or
+                  "$($report.runAttempt)" -notmatch '^\d+$') { throw 'Invalid original workflow run.' }
+              $runId = $report.run.Substring($runBase.Length)
+              $root = 'original-build'
+              & gh run download $runId --repo $repository --name "windows-release-$runId-$($report.runAttempt)" --dir $root
+              if ($LASTEXITCODE -ne 0) { throw 'The original verified build is required to complete this draft.' }
+            }
+            foreach ($file in $missing) {
+              if ((Get-Sha256 "$root/$($file.name)") -cne $file.sha256) { throw "Original bytes unavailable: $($file.name)" }
+            }
+            $paths = @($missing | ForEach-Object { "$root/$($_.name)" })
+            & gh release upload $tag @paths --repo $repository
+            if ($LASTEXITCODE -ne 0) { throw 'Could not complete the release draft.' }
+            $remote = Get-TagRelease
+            Test-ReleaseAssets $remote
+          }
+          if (@($remote.assets).Count -ne $report.files.Count + 1) { throw 'Release file set is incomplete.' }
+          if ($remote.draft) {
+            & gh release edit $tag --repo $repository --draft=false
+            if ($LASTEXITCODE -ne 0) { throw 'Could not publish the verified release draft.' }
+          } else {
+            Write-Host 'Reusing the published assets for this commit, including the original npm tarball.'
+          }
+
+  npm:
+    name: Publish the GitHub Release installer to npm
+    needs: [build, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Verify and publish the canonical tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:RELEASE_VERSION
+          $tag = $env:GITHUB_REF_NAME
+          $repo = $env:GITHUB_REPOSITORY
+          if ($tag -cne "v$version") { throw 'npm version/tag mismatch.' }
+          $remoteCommit = & gh api "repos/$repo/commits/$tag" --jq .sha
+          if ($LASTEXITCODE -ne 0 -or $remoteCommit -cne $env:GITHUB_SHA) { throw 'Release tag has moved.' }
+          $prefix = "livehime-obs-$version-windows-x64"
+          $installer = "$prefix-setup.exe"
+          $tarball = "lightsing-livehime-obs-win32-x64-$version.tgz"
+          $reportName = "$prefix-validation.json"
+          & gh release download $tag --repo $repo --dir canonical --pattern $installer --pattern $tarball --pattern $reportName
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download the GitHub Release installer and npm tarball.' }
+          $report = Get-Content -Raw -LiteralPath "canonical/$reportName" | ConvertFrom-Json
+          if ($report.commit -cne $env:GITHUB_SHA -or $report.version -cne $version -or !$report.installer.passed) {
+            throw 'GitHub Release validation does not match the tag.'
+          }
+          foreach ($name in @($installer, $tarball)) {
+            $record = @($report.files | Where-Object name -CEQ $name)
+            $actual = (Get-FileHash -LiteralPath "canonical/$name").Hash.ToLowerInvariant()
+            if ($record.Count -ne 1 -or $actual -cne $record[0].sha256) { throw "Release hash mismatch: $name" }
+          }
+          & python3 -B scripts/npm_package.py verify $version "canonical/$tarball" --installer "canonical/$installer"
+          if ($LASTEXITCODE -ne 0) { throw 'Tarball does not contain the verified installer.' }
+          function Read-NpmStatus {
+            $state = & python3 -B scripts/npm_package.py registry-status $version "canonical/$tarball"
+            if ($LASTEXITCODE -ne 0 -or $state -notin @('absent', 'identical')) { throw 'npm version check failed.' }
+            return $state
+          }
+          if ((Read-NpmStatus) -eq 'identical') {
+            Write-Host 'npm already contains the exact GitHub Release tarball.'
+            exit 0
+          }
+          & npm publish "canonical/$tarball" --access public --ignore-scripts --provenance --registry=https://registry.npmjs.org
+          $publishExit = $LASTEXITCODE
+          foreach ($attempt in 1..5) {
+            if ((Read-NpmStatus) -eq 'identical') { exit 0 }
+            if ($attempt -lt 5) { Start-Sleep -Seconds 3 }
+          }
+          throw "The exact package was not confirmed on npm (publish exit $publishExit)."

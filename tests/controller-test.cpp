@@ -3,6 +3,7 @@
 
 #include <QCoreApplication>
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QEventLoop>
 #include <QTemporaryDir>
@@ -261,13 +262,20 @@ void debounceTimerSavesWithoutBlur()
     QTemporaryDir directory;
     LiveController controller(directory.path());
     signIn(controller);
-    controller.setTitleDraft(QStringLiteral("Automatically synchronized"));
+    controller.setTitleDraft(QStringLiteral("Fi"));
     QEventLoop wait;
-    QTimer::singleShot(1300, &wait, &QEventLoop::quit);
+    QTimer::singleShot(1500, &wait, &QEventLoop::quit);
+    wait.exec();
+    check(titleWrites.isEmpty(), "a short typing pause does not save a partial title");
+    QElapsedTimer idle;
+    idle.start();
+    controller.setTitleDraft(QStringLiteral("Final title"));
+    QObject::connect(&controller, &LiveController::metadataSaved, &wait, &QEventLoop::quit);
+    QTimer::singleShot(8000, &wait, &QEventLoop::quit);
     wait.exec();
     drain();
-    check(titleWrites == QStringList{QStringLiteral("Automatically synchronized")} && !controller.metadataBusy(),
-          "one-second timer automatically saves without blur or start");
+    check(idle.elapsed() >= 4900 && titleWrites == QStringList{QStringLiteral("Final title")} &&
+              !controller.metadataBusy(), "save only the final title after five idle seconds");
 }
 
 void failedBackgroundReadDoesNotStrandNewDraft()

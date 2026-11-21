@@ -3,13 +3,16 @@
 #include "protocol.hpp"
 #include "room-dock.hpp"
 #include "room-realtime.hpp"
+#include "update-controller.hpp"
 #include <QAction>
 #include <QCoreApplication>
 #include <QDir>
 #include <QDockWidget>
+#include <QFileInfo>
 #include <QLabel>
 #include <QPointer>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QVBoxLayout>
 #include <obs-module.h>
 #include <util/bmem.h>
@@ -29,6 +32,7 @@ QPointer<QLabel> loadingLabel;
 QPointer<livehime::LiveController> controller;
 QPointer<livehime::RoomRealtime> realtime;
 QPointer<livehime::FloatingWindows> windows;
+QPointer<livehime::UpdateController> updates;
 std::array<QPointer<QDockWidget>, 3> realtimeDocks;
 bool waitingForFrontend = false;
 bool frontendValid = true;
@@ -46,6 +50,10 @@ void frontendReady(obs_frontend_event event, void *) {
         // valid frontend. No frontend API is used after the callback returns.
         obs_frontend_remove_event_callback(frontendReady, nullptr);
         waitingForFrontend = false; // Frontend APIs are invalid after this event.
+        if (updates) {
+            updates->onObsExit();
+            delete updates.data();
+        }
         if (windows)
             windows->shutdown();
         removeRealtimeDocks();
@@ -208,6 +216,14 @@ void createRoomDock() {
     }
     delete loadingLabel.data();
     dockContainer->layout()->addWidget(dock);
+    char *helperPath = obs_module_file("livehime-update-helper.exe");
+    const auto cacheBase = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (helperPath && !cacheBase.isEmpty()) {
+        updates = new livehime::UpdateController(storage, QDir(cacheBase).filePath("livehime-obs/updates"),
+                                                 QFileInfo(QString::fromUtf8(helperPath)).absoluteFilePath());
+        dock->addUpdateControls(updates->createControls(dock));
+    }
+    bfree(helperPath);
     controller->initialize();
     blog(LOG_INFO,
          "[livehime-obs] Loaded version " LIVEHIME_OBS_VERSION
@@ -217,6 +233,7 @@ void createRoomDock() {
 } // namespace
 
 void obs_module_unload(void) {
+    delete updates.data();
     if (frontendValid) {
         obs_frontend_remove_event_callback(frontendReady, nullptr);
         waitingForFrontend = false;

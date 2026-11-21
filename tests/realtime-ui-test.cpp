@@ -12,20 +12,27 @@
 #include <QEnterEvent>
 #include <QEventLoop>
 #include <QFontDatabase>
+#include <QInputMethodEvent>
+#include <QKeyEvent>
 #include <QJsonArray>
+#include <QLineEdit>
 #include <QListView>
 #include <QMainWindow>
 #include <QLabel>
 #include <QPainter>
 #include <QPushButton>
 #include <QScreen>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
+#include <QSpinBox>
 #include <QTemporaryDir>
 #include <QStyledItemDelegate>
 #include <QTextLayout>
 #include <QTextBrowser>
 #include <QtMath>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #pragma comment(lib, "user32.lib")
@@ -33,11 +40,17 @@
 #include <iostream>
 
 namespace livehime {
+static QList<RoomEntry> fixtureEntries = {{QStringLiteral("早到的观众"), 1700000000, {}, 1},
+                                          {QStringLiteral("新到的观众"), 1700000001, {}, 2}};
 SessionStore::SessionStore(QString p) : directory_(std::move(p)) {}
 LiveController::LiveController(QString p, QObject *o)
     : QObject(o), store_(std::move(p)), client_(nullptr), bridge_(nullptr) {}
 LiveController::~LiveController() = default;
 RoomRealtime::RoomRealtime(LiveController *c, QObject *p) : QObject(p), controller_(c), goim_(nullptr) {
+    entryHistory_ = fixtureEntries;
+    connect(this, &RoomRealtime::entryHistoryChanged, this, [this] { entryHistory_ = fixtureEntries; });
+    uid_ = 123;
+    roomId_ = 456;
     status_ = QStringLiteral("离线合成数据 · 布局验证");
     audienceStatus_ = guardStatus_ = QStringLiteral("离线合成数据");
     audience_ = QJsonObject{
@@ -60,6 +73,8 @@ RoomRealtime::RoomRealtime(LiveController *c, QObject *p) : QObject(p), controll
 RoomRealtime::~RoomRealtime() = default;
 static QString lastType, lastSort;
 static int lastGuard = 0;
+static QString postedText;
+void RoomRealtime::sendDanmaku(const QString &text) { postedText = text; }
 void RoomRealtime::setVisible(int, bool) {}
 void RoomRealtime::selectAudience(const QString &t, const QString &s) {
     lastType = t;
@@ -113,6 +128,41 @@ static void checkUnlocked(FloatingWindows &windows,const char *reason) {
         check((GetWindowLongPtrW(reinterpret_cast<HWND>(dock->winId()),GWL_EXSTYLE)&WS_EX_TRANSPARENT)==0,
               "native Windows passthrough style is cleared");
 #endif
+}
+static void checkSettingsWheel(QWidget *panel) {
+    auto *scroll = panel->findChild<QScrollArea *>();
+    auto *toggle = panel->findChild<QPushButton *>("interaction-settings");
+    const auto fields = panel->findChildren<QSpinBox *>();
+    check(scroll && toggle && fields.size() == 2, "interaction settings has font and opacity controls");
+    if (!scroll || !toggle || fields.size() != 2) return;
+    panel->window()->resize(420, 300);
+    toggle->click();
+    panel->window()->activateWindow();
+    settle();
+    if (QApplication::platformName() == "minimal") {
+        // The headless backend does not activate floating tool windows on request.
+        QT_WARNING_PUSH
+        QT_WARNING_DISABLE_DEPRECATED
+        QApplication::setActiveWindow(panel->window());
+        QT_WARNING_POP
+    }
+    for (auto *field : fields) {
+        toggle->setFocus(Qt::OtherFocusReason);
+        scroll->ensureWidgetVisible(field);
+        const auto center = field->rect().center();
+        const int initial = field->value();
+        QWheelEvent wheel(center, field->mapToGlobal(center), {}, QPoint(0, -120), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(field, &wheel);
+        check(!wheel.isAccepted() && field->value() == initial && field->focusPolicy() == Qt::StrongFocus,
+              "unfocused settings leave the wheel for the dock without editing values");
+        field->setFocus(Qt::TabFocusReason);
+        QApplication::sendEvent(field, &wheel);
+        check(wheel.isAccepted() && field->value() == initial - 1,
+              "focused numeric setting accepts a deliberate wheel edit");
+        field->setValue(initial);
+    }
+    toggle->click();
 }
 int main(int argc, char **argv) {
     const bool screenshots = !qEnvironmentVariable("LIVEHIME_UI_SCREENSHOTS").isEmpty();
@@ -268,6 +318,25 @@ int main(int argc, char **argv) {
         const auto hostFlags=host.windowFlags();
         auto registered=registerShells(host);
         FloatingWindows windows(&service,dir.path(),&host,registered);
+        auto *input = windows.panelWidget(0)->findChild<QLineEdit *>("danmakuInput");
+        auto *send = windows.panelWidget(0)->findChild<QPushButton *>("danmakuSend");
+        check(input && send && !send->isEnabled(), "empty chat draft cannot send");
+        if (input && send) {
+            input->setText(QStringLiteral("主播你好"));
+            QInputMethodEvent preedit(QStringLiteral("ni"), {});
+            QApplication::sendEvent(input, &preedit);
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(input, &enter);
+            check(postedText.isEmpty(), "IME candidate confirmation does not post");
+            QInputMethodEvent finish;
+            QApplication::sendEvent(input, &finish);
+            QApplication::sendEvent(input, &enter);
+            check(postedText == input->text(), "Return posts committed chat text");
+            service.danmakuSendFinished(false, QStringLiteral("已禁言"));
+            check(!input->text().isEmpty(), "server rejection preserves the draft");
+            service.danmakuSendFinished(true, QStringLiteral("已发送"));
+            check(input->text().isEmpty() && !send->isEnabled(), "confirmed send clears the draft");
+        }
         const char *expectedIds[]={"livehime-obs-interaction","livehime-obs-audience","livehime-obs-guard"};
         for(int k=0;k<3;++k){
             check(QString::fromLatin1(FloatingWindows::dockId(k))==QString::fromLatin1(expectedIds[k]),"dock restore ID remains stable");
@@ -276,11 +345,34 @@ int main(int argc, char **argv) {
             windows.showWindow(k);
             windows.dockWindow(k);
             check(!registered[k]->isFloating(),"each panel docks into the host");
+            host.addDockWidget(Qt::BottomDockWidgetArea, registered[k]);
+            host.resizeDocks({registered[k]}, {130}, Qt::Vertical);
+            settle();
+            auto *scroll = registered[k]->findChild<QScrollArea *>();
+            check(registered[k]->height() < 200 && scroll && scroll->verticalScrollBar()->maximum() > 0,
+                  "short realtime dock scrolls without forcing a taller host layout");
+            if (scroll) {
+                auto *layout = scroll->widget()->layout();
+                QWidget *last = nullptr;
+                for (int i = layout->count() - 1; i >= 0 && !last; --i) {
+                    auto *widget = layout->itemAt(i)->widget();
+                    if (widget && widget->isVisible())
+                        last = widget;
+                }
+                scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+                check(last && scroll->viewport()->rect().contains(last->mapTo(scroll->viewport(), last->rect().bottomLeft())),
+                      "last visible realtime control is reachable in a short dock");
+                host.resizeDocks({registered[k]}, {600}, Qt::Vertical);
+                settle();
+                check(scroll->verticalScrollBar()->maximum() == 0, "roomy realtime dock uses its list scrollbars only");
+            }
             windows.floatWindow(k);
             check(registered[k]->isFloating(),"each panel can return to a floating window");
         }
         auto interaction=windows.dockWidget(0);
         auto panel=windows.panelWidget(0);
+        windows.showWindow(0);
+        checkSettingsWheel(panel);
         auto lock=panel->findChild<QPushButton *>("interaction-lock");
         auto pin=panel->findChild<QCheckBox *>("window-pin-0");
         auto mode=panel->findChild<QPushButton *>("window-mode-0");
@@ -419,6 +511,59 @@ int main(int argc, char **argv) {
         check(!a->isVisible(), "close hides");
         windows.showWindow(0);
         check(a->isVisible(), "hidden window restored");
+        auto *entryButton = a->findChild<QPushButton *>("show-entry-history");
+        check(entryButton, "interaction offers room entry history");
+        if (entryButton) {
+            entryButton->click();
+            auto *dialog = a->findChild<QDialog *>("entry-history-dialog");
+            auto *list = dialog ? dialog->findChild<QListView *>("entry-history-list") : nullptr;
+            check(dialog && dialog->isVisible() && !dialog->isModal() && list && list->model()->rowCount() == 2,
+                  "entry history opens without blocking the interaction dock");
+            if (list) {
+                auto *model = list->model();
+                const auto firstTime = QDateTime::fromSecsSinceEpoch(1700000000).toString("MM-dd HH:mm:ss");
+                check(model->index(0, 0).data().toString().startsWith(firstTime) &&
+                      model->index(0, 0).data().toString().endsWith(QStringLiteral("早到的观众")) &&
+                      model->index(1, 0).data().toString().endsWith(QStringLiteral("新到的观众")),
+                      "entry history displays times and names in arrival order");
+                if (screenshots)
+                    dialog->grab().save(qEnvironmentVariable("LIVEHIME_UI_SCREENSHOTS") + "/entry-history.png");
+                auto refresh = [&] {
+                    QEventLoop updates;
+                    bool refreshed = false;
+                    QObject::connect(model, &QAbstractItemModel::modelReset, &updates, [&] {
+                        refreshed = true;
+                        updates.quit();
+                    });
+                    emit service.entryHistoryChanged();
+                    QTimer::singleShot(2000, &updates, &QEventLoop::quit);
+                    updates.exec();
+                    check(refreshed, "open entry history refreshes when a new batch arrives");
+                };
+                for (int i = 3; i <= 500; ++i)
+                    fixtureEntries.append({QString::number(i), 1700000000 + i, {}, i});
+                refresh();
+                check(list->verticalScrollBar()->value() == list->verticalScrollBar()->maximum(),
+                      "entry history follows new arrivals at the bottom");
+                list->scrollTo(model->index(70, 0), QAbstractItemView::PositionAtTop);
+                list->verticalScrollBar()->setValue(list->verticalScrollBar()->value() + 3);
+                const auto top = list->indexAt(QPoint(1, 0));
+                const auto visible = top.data();
+                const int offset = list->visualRect(top).top();
+                fixtureEntries.removeFirst();
+                fixtureEntries.append({QStringLiteral("501"), 1700000501, {}, 501});
+                refresh();
+                const auto newTop = list->indexAt(QPoint(1, 0));
+                check(visible.isValid() && newTop.data() == visible && list->visualRect(newTop).top() == offset,
+                      "evicting an old entry keeps the same viewer visible at the same offset");
+            }
+            entryButton->click();
+            check(a->findChildren<QDialog *>("entry-history-dialog").size() == 1, "reopening reuses entry history");
+            QPointer<QDialog> previous = dialog;
+            emit service.contextChanged();
+            settle();
+            check(!previous || !previous->isVisible(), "changing room dismisses the previous room's entry history");
+        }
         windows.dockWidget(0)->move(-20000, -20000);
         windows.dockWidget(0)->hide();
         windows.showWindow(0);

@@ -1,5 +1,6 @@
 #include "room-realtime.hpp"
 #include "goim-client.hpp"
+#include "room-interaction.hpp"
 #include <QDateTime>
 #include <QRandomGenerator>
 #include <QSet>
@@ -32,13 +33,43 @@ RoomRealtime::RoomRealtime(LiveController *controller, QObject *parent)
     connect(goim_, &GoimClient::events, this, [this](const QJsonArray &batch) {
         if (!uid_ || !roomId_ || stopped_)
             return;
-        bool rank = false, guard = false;
+        bool rank = false, guard = false, entriesChanged = false;
+        QJsonArray displayEvents;
         for (const auto &v : batch) {
             const auto event = v.toObject();
+            const auto cmd = event.value("cmd").toString().section(':', 0, 0);
+            if (cmd == "INTERACT_WORD" || cmd == "INTERACT_WORD_V2") {
+                const auto data = roomInteraction(event, roomId_);
+                if (!data)
+                    continue;
+                if (data->value("msg_type").toInteger() == 1) {
+                    const auto id = event.value("msg_id");
+                    QString messageId = id.isString() ? id.toString() : QString{};
+                    if (id.isDouble() && id.toInteger() > 0)
+                        messageId = QString::number(id.toInteger());
+                    if (messageId.size() > 128)
+                        messageId.clear();
+                    if (messageId.isEmpty())
+                        messageId = data->value("tid").toString(data->value("id_str").toString());
+                    if (!messageId.isEmpty() && entryIds_.contains(messageId))
+                        continue;
+                    if (entryHistory_.size() >= 500)
+                        entryIds_.remove(entryHistory_.takeFirst().messageId);
+                    if (!messageId.isEmpty())
+                        entryIds_.insert(messageId);
+                    const auto timestamp = data->value("timestamp").toInteger();
+                    const auto sequence = entryHistory_.isEmpty() ? 1 : entryHistory_.constLast().sequence + 1;
+                    entryHistory_.append({data->value("uname").toString(), timestamp > 0 ? timestamp : now(),
+                                          messageId, sequence});
+                    entriesChanged = true;
+                }
+                displayEvents.append(QJsonObject{{"cmd", "INTERACT_WORD"}, {"data", *data}});
+                continue;
+            }
+            displayEvents.append(v);
             const auto notice = parseModerationNotice(event, roomId_);
             if (notice && (notice->kind != ModerationNotice::Kind::Ecology || controller_->room().liveStatus == 1))
                 emit moderationNotice(*notice);
-            const auto cmd = event.value("cmd").toString().section(':', 0, 0);
             rank |= cmd == "ONLINE_RANK_V2" || cmd == "ONLINE_RANK_V3";
             guard |= cmd == "GUARD_BUY" || cmd == "USER_TOAST_MSG" || cmd == "USER_TOAST_MSG_V2";
         }
@@ -47,7 +78,10 @@ RoomRealtime::RoomRealtime(LiveController *controller, QObject *parent)
             audienceDirty_ = true;
         if (guard)
             guardDirty_ = true;
-        emit events(batch);
+        if (entriesChanged)
+            emit entryHistoryChanged();
+        if (!displayEvents.isEmpty())
+            emit events(displayEvents);
     });
     refreshTimer_.setInterval(1000);
     connect(&refreshTimer_, &QTimer::timeout, this, [this] {
@@ -90,12 +124,16 @@ void RoomRealtime::stop() {
     ++guardEpoch_;
     refreshTimer_.stop();
     retryTimer_.stop();
+    sendingDanmaku_ = false;
     if (controller_) {
+        controller_->client()->cancelRealtime(sendReply_);
         controller_->client()->cancelRealtime(configReply_);
         controller_->client()->cancelRealtime(audienceReply_);
         controller_->client()->cancelRealtime(guardReply_);
     }
     goim_->stop();
+    entryHistory_.clear();
+    entryIds_.clear();
     emit stopped();
 }
 void RoomRealtime::syncContext() {
@@ -112,6 +150,11 @@ void RoomRealtime::syncContext() {
     accountEpoch_ = epoch;
     uid_ = uid;
     roomId_ = room;
+    entryHistory_.clear();
+    entryIds_.clear();
+    sendingDanmaku_ = false;
+    controller_->client()->cancelRealtime(sendReply_);
+    sendReply_.clear();
     controller_->client()->cancelRealtime(configReply_);
     controller_->client()->cancelRealtime(audienceReply_);
     controller_->client()->cancelRealtime(guardReply_);
@@ -189,6 +232,34 @@ void RoomRealtime::connectEndpoint() {
     const auto host = endpoints_.at(endpointIndex_).toObject();
     goim_->setContext(uid_, roomId_, connectionToken_, host.value("host").toString(),
                       quint16(host.value("port").toInt()), controller_->deviceId());
+}
+void RoomRealtime::sendDanmaku(const QString &text) {
+    if (sendingDanmaku_) return;
+    if (!canSendDanmaku() || !controller_) {
+        emit danmakuSendFinished(false, QStringLiteral("请先登录并加载直播间。"));
+        return;
+    }
+    if (!protocol::validDanmakuText(text)) {
+        emit danmakuSendFinished(false, QStringLiteral("请输入非空的单行弹幕。"));
+        return;
+    }
+    sendingDanmaku_ = true;
+    const auto epoch = contextEpoch_;
+    const QPointer<RoomRealtime> self(this);
+    auto *reply = controller_->client()->sendDanmaku(roomId_, text, [self, epoch](Result<Done> result) {
+        if (!self || self->contextEpoch_ != epoch || self->stopped_) return;
+        self->sendingDanmaku_ = false;
+        self->sendReply_.clear();
+        if (const auto *error = std::get_if<ApiError>(&result)) {
+            const auto message = error->outcomeUnknown
+                ? QStringLiteral("发送结果未确认，请先查看弹幕记录。") : failure(*error);
+            emit self->danmakuSendFinished(false, message);
+        } else {
+            emit self->danmakuSendFinished(true, QStringLiteral("已发送"));
+        }
+    });
+    if (reply && self && self->contextEpoch_ == epoch && self->sendingDanmaku_)
+        self->sendReply_ = reply;
 }
 void RoomRealtime::setVisible(int kind, bool visible) {
     if (kind < 0 || kind > 2)

@@ -28,6 +28,7 @@ $stage = Join-Path $buildRoot ('installer-stage-' + [guid]::NewGuid().ToString('
 New-Item -ItemType Directory -Force -Path $stage, $OutputDirectory | Out-Null
 $runtimeFiles = @(
     'obs-plugins/64bit/livehime-obs.dll',
+    'data/obs-plugins/livehime-obs/livehime-update-helper.exe',
     'data/obs-plugins/livehime-obs/locale/en-US.ini',
     'data/obs-plugins/livehime-obs/locale/zh-CN.ini',
     'data/obs-plugins/livehime-obs/qt-plugins/tls/qschannelbackend.dll'
@@ -76,7 +77,8 @@ try {
     $evidence = Join-Path $docs 'validation'
     New-Item -ItemType Directory -Path $evidence | Out-Null
     foreach ($name in @('ctest-0.2.0.txt', 'realtime-qt-probe.json', 'load-0.2.0.json', 'loader-final-0.2.0.json', 'isolated-host-0.2.0.txt', 'installer-0.2.0.json', 'obs-exit-repeat-0.2.0.json', 'loader-0.2.1.json', 'installer-upgrade-0.2.1.json', 'installer-fresh-0.2.1.json', 'ctest-0.2.2.txt', 'loader-0.2.2.json', 'native-ui-0.2.2.json', 'installer-upgrade-0.2.2.json', 'obs-docks-0.2.2.json',
-            'ctest-0.2.4.txt', 'loader-0.2.4.json')) {
+            'ctest-0.2.4.txt', 'loader-0.2.4.json', 'ctest-0.3.0.txt', 'loader-0.3.0.json',
+            'ctest-0.4.0.txt', 'loader-0.4.0.json')) {
         $source = Join-Path $projectRoot "validation\$name"
         if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $evidence }
     }
