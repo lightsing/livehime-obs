@@ -461,7 +461,7 @@ jobs:
             Write-Host 'npm already contains the exact GitHub Release tarball.'
             exit 0
           }
-          & npm publish "canonical/$tarball" --access public --ignore-scripts --provenance --registry=https://registry.npmjs.org
+          & npm publish "./canonical/$tarball" --access public --ignore-scripts --provenance --registry=https://registry.npmjs.org
           $publishExit = $LASTEXITCODE
           foreach ($attempt in 1..5) {
             if ((Read-NpmStatus) -eq 'identical') { exit 0 }
