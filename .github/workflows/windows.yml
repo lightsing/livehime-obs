@@ -415,7 +415,7 @@ jobs:
     name: Publish the GitHub Release installer to npm
     needs: [build, release]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
@@ -460,21 +460,30 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Tarball does not contain the verified installer.' }
           function Read-NpmStatus {
             $state = & python3 -B scripts/npm_package.py registry-status $version "canonical/$tarball"
-            if ($LASTEXITCODE -ne 0 -or $state -notin @('absent', 'identical')) { throw 'npm version check failed.' }
+            if ($LASTEXITCODE -ne 0 -or $state -notin @('absent', 'pending', 'identical')) { throw 'npm version check failed.' }
             return $state
           }
-          if ((Read-NpmStatus) -eq 'identical') {
+          $state = Read-NpmStatus
+          if ($state -eq 'identical') {
             Write-Host 'npm already contains the exact GitHub Release tarball.'
             exit 0
           }
-          & npm publish "./canonical/$tarball" --access public --ignore-scripts --provenance --registry=https://registry.npmjs.org
-          $publishExit = $LASTEXITCODE
-          # The registry can accept a publish and process it for several minutes before serving the tarball.
-          $waitSeconds = if ($publishExit -eq 0) { 360 } else { 15 }
-          $deadline = [DateTime]::UtcNow.AddSeconds($waitSeconds)
+          $publishExit = $null
+          if ($state -eq 'absent') {
+            & npm publish "./canonical/$tarball" --access public --ignore-scripts --provenance --registry=https://registry.npmjs.org
+            $publishExit = $LASTEXITCODE
+          } else {
+            Write-Host 'npm already has the matching version metadata. Waiting for its tarball.'
+          }
+          $propagationDeadline = [DateTime]::UtcNow.AddMinutes(20)
+          $deadline = $propagationDeadline
+          if ($null -ne $publishExit -and $publishExit -ne 0) { $deadline = [DateTime]::UtcNow.AddSeconds(15) }
           do {
-            if ((Read-NpmStatus) -eq 'identical') { exit 0 }
+            $state = Read-NpmStatus
+            if ($state -eq 'identical') { exit 0 }
+            if ($state -eq 'pending') { $deadline = $propagationDeadline }
             if ([DateTime]::UtcNow -ge $deadline) { break }
-            Start-Sleep -Seconds 10
+            Start-Sleep -Seconds 15
           } while ($true)
-          throw "The exact package was not confirmed on npm (publish exit $publishExit)."
+          if ($null -ne $publishExit -and $publishExit -ne 0) { throw "npm publish exited $publishExit and the exact package was not confirmed (last status: $state)." }
+          throw "The exact package was not confirmed on npm before timeout (last status: $state)."

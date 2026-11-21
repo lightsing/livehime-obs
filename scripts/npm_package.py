@@ -64,13 +64,14 @@ def verify(version, installer, archive_path):
 
 
 def registry_status(version, archive, fetch=urlopen):
-    """Only a version-level 404 permits a publish. Check existing immutable tarball bytes."""
+    """Return absent, pending tarball propagation, or identical verified bytes."""
     metadata(version)
     url = f"{REGISTRY}/{quote(NAME, safe='@')}/{version}"
     try:
         response = fetch(url, timeout=30)
     except HTTPError as error:
         if error.code == 404:
+            error.close()
             return "absent"
         raise
     with response:
@@ -86,7 +87,14 @@ def registry_status(version, archive, fetch=urlopen):
     target = urlsplit(dist["tarball"])
     if target.scheme != "https" or target.netloc != "registry.npmjs.org":
         raise ValueError("Unexpected npm tarball origin")
-    with fetch(target.geturl(), timeout=60) as contents:
+    try:
+        contents = fetch(target.geturl(), timeout=60)
+    except HTTPError as error:
+        if error.code == 404:
+            error.close()
+            return "pending"
+        raise
+    with contents:
         if hashlib.file_digest(contents, "sha512").digest() != digest:
             raise ValueError("Published npm tarball differs from the GitHub Release tarball")
     return "identical"
