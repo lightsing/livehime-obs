@@ -1,5 +1,8 @@
 #include "floating-windows.hpp"
 #include "danmaku-input-row.hpp"
+#include "connection-indicator.hpp"
+#include "chat-user-menu.hpp"
+#include "danmaku-follow.hpp"
 #include "dock-focus.hpp"
 #include "display-asset-cache.hpp"
 #include "dock-scroll-area.hpp"
@@ -8,6 +11,8 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QContextMenuEvent>
+#include <QDesktopServices>
 #include <QDateTime>
 #include <QDeadlineTimer>
 #include <QDialog>
@@ -26,6 +31,7 @@
 #include <QLinearGradient>
 #include <QListView>
 #include <QMainWindow>
+#include <QMenu>
 #include <QPainter>
 #include <QPushButton>
 #include <QScreen>
@@ -48,7 +54,7 @@
 #include <utility>
 
 namespace livehime {
-static constexpr qint64 HighlightDurationMs = 1200;
+static constexpr qint64 HighlightDurationMs = 1800;
 static qint64 monotonicMs() { return QDeadlineTimer::current(Qt::PreciseTimer).deadline(); }
 static QJsonValue av(const QJsonArray &a, int i) { return i >= 0 && i < a.size() ? a.at(i) : QJsonValue{}; }
 DisplayListModel::DisplayListModel(int limit, QObject *p) : QAbstractListModel(p), limit_(qMax(1, limit)) {}
@@ -63,6 +69,10 @@ QVariant DisplayListModel::data(const QModelIndex &i, int role) const {
         return row.text;
     if (role == HighlightDeadlineRole && row.highlightDeadline)
         return row.highlightDeadline;
+    if (role == SenderRole && row.sender.uid > 0)
+        return QVariant::fromValue(row.sender);
+    if (role == MessageSequenceRole && row.sequence)
+        return row.sequence;
     if (role == EmotesRole && !row.emotes.isEmpty())
         return QVariant::fromValue(row.emotes);
     if (role == EmoteImagesRole && !row.emotes.isEmpty())
@@ -83,10 +93,14 @@ QVariantMap DisplayListModel::emoteImages(const QModelIndex &i, bool requestMiss
     return images;
 }
 void DisplayListModel::setAssets(DisplayAssetCache *c, bool showEmotes) {
+    if (assets_)
+        disconnect(assets_, nullptr, this, nullptr);
     assets_ = c;
-    connect(c, &DisplayAssetCache::ready, this, [this] {
-        if (rowCount())
-            emit dataChanged(index(0), index(rowCount() - 1), {Qt::DecorationRole});
+    connect(c, &DisplayAssetCache::ready, this, [this](const QString &url) {
+        if (!showAvatars_) return;
+        for (int i = 0; i < rowCount(); ++i)
+            if (rows_.at(i).avatar == url)
+                emit dataChanged(index(i), index(i), {Qt::DecorationRole, Qt::SizeHintRole});
     });
     if (showEmotes) {
         connect(c, &DisplayAssetCache::emoteReady, this, [this](const QString &url) {
@@ -102,12 +116,14 @@ void DisplayListModel::setAssets(DisplayAssetCache *c, bool showEmotes) {
     }
 }
 void DisplayListModel::setAvatarsVisible(bool v) {
+    if (showAvatars_ == v)
+        return;
     showAvatars_ = v;
     if (rowCount())
-        emit dataChanged(index(0), index(rowCount() - 1), {Qt::DecorationRole});
+        emit dataChanged(index(0), index(rowCount() - 1), {Qt::DecorationRole, Qt::SizeHintRole});
 }
 void DisplayListModel::append(const QString &t, const QString &avatar, qint64 highlightDeadline,
-                              QList<DanmakuEmote> emotes) {
+                              QList<DanmakuEmote> emotes, DisplaySender sender, qint64 sequence) {
     if (rows_.size() >= limit_) {
         beginRemoveRows({}, 0, 0);
         rows_.removeFirst();
@@ -118,34 +134,36 @@ void DisplayListModel::append(const QString &t, const QString &avatar, qint64 hi
     emotes.removeIf([&text](const DanmakuEmote &e) {
         return e.start < 0 || e.length <= 0 || e.start > text.size() - e.length;
     });
-    rows_.append({text, avatar, highlightDeadline, std::move(emotes)});
+    rows_.append({text, avatar, highlightDeadline, std::move(emotes), std::move(sender), sequence});
     endInsertRows();
 }
 void DisplayListModel::replace(const QStringList &r) {
     beginResetModel();
     rows_.clear();
     for (qsizetype i = 0; i < qMin<qsizetype>(limit_, r.size()); ++i)
-        rows_.append({r[i], {}, 0, {}});
+        rows_.append({r[i], {}, 0, {}, {}, 0});
     endResetModel();
 }
 void DisplayListModel::clear() { replace({}); }
+static constexpr std::array UserFields{"uinfo", "sender_uinfo", "user", "user_info"};
 static QJsonObject userObject(const QJsonObject &r) {
-    auto u = r.value("uinfo").toObject();
-    if (u.isEmpty())
-        u = r.value("sender_uinfo").toObject();
-    if (u.isEmpty())
-        u = r.value("user").toObject();
-    if (u.isEmpty())
-        u = r.value("user_info").toObject();
-    return u;
+    for (auto field : UserFields) {
+        const auto user = r.value(QLatin1String(field)).toObject();
+        if (!user.isEmpty()) return user;
+    }
+    return {};
 }
 static bool mystery(const QJsonObject &r) {
-    const auto u = userObject(r);
-    return !r.value("anon").toObject().isEmpty() || u.value("is_mystery").toBool() ||
-           u.value("is_mystery").toInt() != 0 || r.value("is_mystery").toBool() ||
-           r.value("is_mystery").toInt() != 0 || u.value("base").toObject().value("is_mystery").toBool() ||
-           u.value("base").toObject().value("is_mystery").toInt() != 0 ||
-           !u.value("anon").toObject().isEmpty();
+    auto masked = [](const QJsonObject &object) {
+        const auto flag = object.value("is_mystery");
+        return flag.toBool() || flag.toInt() != 0 || !object.value("anon").toObject().isEmpty();
+    };
+    if (masked(r)) return true;
+    for (auto field : UserFields) {
+        const auto user = r.value(QLatin1String(field)).toObject();
+        if (!user.isEmpty() && (masked(user) || masked(user.value("base").toObject()))) return true;
+    }
+    return false;
 }
 QString privateDisplayName(const QJsonObject &r) {
     if (mystery(r))
@@ -154,6 +172,30 @@ QString privateDisplayName(const QJsonObject &r) {
     if (name.isEmpty())
         name = r.value("uname").toString(r.value("name").toString(r.value("username").toString()));
     return name.isEmpty() ? QStringLiteral("观众") : name.left(120);
+}
+static qint64 positiveId(const QJsonValue &value) {
+    return qMax(qint64(0), value.isString() ? value.toString().toLongLong() : value.toInteger());
+}
+static DisplaySender displaySender(const QJsonObject &r, int nameOffset = 0) {
+    if (mystery(r))
+        return {};
+    auto uid = positiveId(r.value("uid"));
+    for (auto field : UserFields) {
+        const auto nestedUid = positiveId(r.value(QLatin1String(field)).toObject().value("uid"));
+        if (uid && nestedUid && uid != nestedUid) return {};
+        if (nestedUid) uid = nestedUid;
+    }
+    return {uid, privateDisplayName(r), nameOffset, {}};
+}
+static QString gloryBadge(const QJsonObject &r, qint64 legacy = 0) {
+    if (mystery(r))
+        return {};
+    auto wealth = userObject(r).value("wealth").toObject();
+    if (wealth.isEmpty())
+        wealth = r.value("wealth_info").toObject();
+    const auto level = wealth.contains("level") ? positiveId(wealth.value("level"))
+        : r.contains("wealth_level") ? positiveId(r.value("wealth_level")) : legacy;
+    return level > 0 ? QStringLiteral(" [荣耀 %1]").arg(level) : QString{};
 }
 QList<RankChoice> audienceChoices(const QJsonObject &info) {
     QList<RankChoice> out;
@@ -255,9 +297,26 @@ class WrappedHistoryDelegate final : public QStyledItemDelegate {
         QStyleOptionViewItem styled(option);
         initStyleOption(&styled, index);
         const bool avatar = !qvariant_cast<QPixmap>(index.data(Qt::DecorationRole)).isNull();
-        const int width = qMax(32, view_->viewport()->width());
+        const int width = qMax(32, option.rect.width() > 0 ? qMin(option.rect.width(), view_->viewport()->width())
+                                                         : view_->viewport()->width());
         const qreal height = layoutMessage(index, styled, qMax(16, width - 12 - (avatar ? 38 : 0)), nullptr);
         return QSize(width, qMax(avatar ? 44 : 0, qCeil(height) + 12));
+    }
+    bool hitsSender(const QModelIndex &index, const DisplaySender &sender, QPoint point) const {
+        const auto rect = view_->visualRect(index);
+        point -= rect.topLeft() + QPoint(6, 6);
+        const bool avatar = !index.data(Qt::DecorationRole).value<QPixmap>().isNull();
+        if (avatar && QRect(0, 0, 32, 32).contains(point))
+            return true;
+        if (avatar)
+            point.rx() -= 38;
+        QStyleOptionViewItem style;
+        style.initFrom(view_);
+        style.font = view_->font();
+        initStyleOption(&style, index);
+        int character = -1;
+        layoutMessage(index, style, qMax(16, rect.width() - 12 - (avatar ? 38 : 0)), nullptr, point, &character);
+        return character >= sender.nameOffset && character < sender.nameOffset + sender.name.size();
     }
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
                const QModelIndex &index) const override {
@@ -274,13 +333,18 @@ class WrappedHistoryDelegate final : public QStyledItemDelegate {
             const auto remaining = deadline - monotonicMs();
             if (remaining > 0) {
                 auto tint = styled.palette.color(QPalette::Highlight);
-                const float strength = float(qMin(remaining, HighlightDurationMs)) / float(HighlightDurationMs);
-                tint.setAlphaF(0.24f * strength);
+                const auto base = styled.palette.color(QPalette::Base);
+                if (tint.hsvSaturationF() < 0.35 || qAbs(qGray(tint.rgb()) - qGray(base.rgb())) < 35)
+                    tint = base.lightness() < 128 ? QColor(99, 170, 255) : QColor(42, 105, 205);
+                const float strength = qMin(1.f, float(remaining) / float(HighlightDurationMs - 350));
+                tint.setAlphaF(0.57f * strength);
                 QLinearGradient wash(option.rect.topLeft(), option.rect.topRight());
                 wash.setColorAt(0, tint);
-                tint.setAlpha(0);
+                tint.setAlphaF(0.16f * strength);
                 wash.setColorAt(1, tint);
                 painter->fillRect(option.rect, wash);
+                tint.setAlphaF(0.94f * strength);
+                painter->fillRect(QRect(option.rect.topLeft(), QSize(3, option.rect.height())), tint);
                 // Repaint only fading rows. No history rebuild or scroll changes between frames.
                 dirtyRows_ += option.rect;
                 if (!frameTimer_.isActive())
@@ -299,12 +363,21 @@ class WrappedHistoryDelegate final : public QStyledItemDelegate {
 
   private:
     static qreal layoutMessage(const QModelIndex &index, const QStyleOptionViewItem &style, int width,
-                               QPainter *painter) {
+                               QPainter *painter, QPoint hitPoint = {}, int *character = nullptr) {
         const auto text = index.data().toString();
         const auto emotes = index.data(DisplayListModel::EmotesRole).value<QList<DanmakuEmote>>();
         if (emotes.isEmpty()) {
             QTextLayout layout(QString(text).replace(QChar('\n'), QChar(0x2028)), style.font);
             const auto height = arrange(layout, width);
+            if (character) {
+                for (int n = 0; n < layout.lineCount(); ++n) {
+                    auto line = layout.lineAt(n);
+                    if (line.naturalTextRect().contains(hitPoint)) {
+                        *character = line.xToCursor(hitPoint.x(), QTextLine::CursorOnCharacter);
+                        break;
+                    }
+                }
+            }
             if (painter) {
                 painter->setPen(style.palette.color(QPalette::Text));
                 layout.draw(painter, {});
@@ -360,6 +433,8 @@ class WrappedHistoryDelegate final : public QStyledItemDelegate {
             cursor.insertImage(format);
         }
         cursor.insertText(text.mid(pos), plain);
+        if (character)
+            *character = doc.documentLayout()->hitTest(hitPoint, Qt::ExactHit);
         if (painter) {
             QAbstractTextDocumentLayout::PaintContext context;
             context.palette = style.palette;
@@ -409,10 +484,13 @@ class EntryHistoryModel final : public QAbstractListModel {
         const auto &entry = rows_.at(index.row());
         if (role == DisplayListModel::HighlightDeadlineRole && entry.sequence > existingThrough_)
             return entry.receivedAtMs + HighlightDurationMs;
-        if (role != Qt::DisplayRole && role != Qt::ToolTipRole)
+        if (role != Qt::DisplayRole && role != Qt::ToolTipRole && role != DisplayListModel::SenderRole)
             return {};
         const auto time = QDateTime::fromSecsSinceEpoch(entry.timestamp).toString(QStringLiteral("MM-dd HH:mm:ss"));
-        return time + QStringLiteral("   ") + entry.name;
+        if (role == DisplayListModel::SenderRole)
+            return entry.uid > 0 ? QVariant::fromValue(DisplaySender{entry.uid, entry.name, int(time.size()) + 3, {}}) : QVariant{};
+        const QString badge = entry.glory > 0 ? QStringLiteral(" [荣耀 %1]").arg(entry.glory) : QString{};
+        return time + QStringLiteral("   ") + entry.name + badge;
     }
   private:
     QList<RoomEntry> rows_;
@@ -423,6 +501,8 @@ class HistoryView final : public QListView {
   public:
     bool pauseOnHover = false, hovered = false;
     std::function<void()> resume;
+    std::function<void()> hoverChanged;
+    std::function<void(const DisplaySender &, QPoint)> userMenu;
     explicit HistoryView(QWidget *p = nullptr) : QListView(p) {
         setWordWrap(true);
         setUniformItemSizes(false);
@@ -437,8 +517,20 @@ class HistoryView final : public QListView {
         if (!(pauseOnHover && hovered) && verticalScrollBar()->value() >= verticalScrollBar()->maximum() - 60)
             scrollToBottom();
     }
+    void refreshRowSizes() { scheduleDelayedItemsLayout(); }
 
   protected:
+    void contextMenuEvent(QContextMenuEvent *event) override {
+        const QPoint pos = viewport()->mapFromGlobal(event->globalPos());
+        const auto index = indexAt(pos);
+        const auto sender = index.data(DisplayListModel::SenderRole).value<DisplaySender>();
+        if (userMenu && sender.uid > 0 && static_cast<WrappedHistoryDelegate *>(itemDelegate())->hitsSender(index, sender, pos)) {
+            userMenu(sender, event->globalPos());
+            event->accept();
+        } else {
+            QListView::contextMenuEvent(event);
+        }
+    }
     void resizeEvent(QResizeEvent *event) override {
         QListView::resizeEvent(event);
         doItemsLayout();
@@ -447,10 +539,14 @@ class HistoryView final : public QListView {
     void enterEvent(QEnterEvent *e) override {
         hovered = true;
         QListView::enterEvent(e);
+        if (hoverChanged)
+            hoverChanged();
     }
     void leaveEvent(QEvent *e) override {
         hovered = false;
         QListView::leaveEvent(e);
+        if (hoverChanged)
+            hoverChanged();
         if (resume)
             resume();
     }
@@ -471,8 +567,8 @@ struct FloatingWindows::Impl {
     QVBoxLayout *interactionLayout{}, *giftLayout{};
     DisplayAssetCache assets;
     DisplayListModel messages{500}, gifts{500}, anti{100}, audience{100}, guard{5000};
-    HistoryView *messageView{}, *antiView{};
-    QPointer<HistoryView> giftView;
+    QPointer<HistoryView> messageView, antiView, giftView;
+    QPointer<DanmakuFollow> chatFollow;
     QLabel *status[DockCount]{}, *stats{};
     QComboBox *master{};
     QPushButton *secondary{}, *guardSecondary{}, *more{};
@@ -490,8 +586,12 @@ struct FloatingWindows::Impl {
         qint64 bytes, highlightDeadline;
         QList<DanmakuEmote> emotes;
         bool reply = false;
+        qint64 sequence = 0;
     };
     QList<ReceivedEvent> history;
+    QSet<QString> chatIds;
+    QList<QString> recentChatIds;
+    qint64 lastChatSequence = 0;
     QTimer renderTimer, giftVisibilityTimer;
     qint64 historyBytes = 0;
     QString watched = QStringLiteral("—"), likes = QStringLiteral("—");
@@ -611,9 +711,20 @@ struct FloatingWindows::Impl {
                 else
                     owner->floatWindow(k);
             });
-            status[k] = new QLabel(service->status(), content);
-            status[k]->setWordWrap(true);
-            l->addWidget(status[k]);
+            auto *indicator = new ConnectionIndicator(service, w);
+            shell->insertWidget(0, indicator);
+            if (k == 0 || k == GiftDock) {
+                status[k] = indicator;
+            } else {
+                auto alarmOnly = [indicator](const RealtimeConnection &s) {
+                    indicator->setVisible(s.phase == RealtimeConnection::Phase::Reconnecting);
+                };
+                alarmOnly(service->connection());
+                QObject::connect(service.data(), &RoomRealtime::connectionChanged, indicator, alarmOnly);
+                status[k] = new QLabel(service->status(), content);
+                status[k]->setWordWrap(true);
+                l->addWidget(status[k]);
+            }
             QObject::connect(dock, &QDockWidget::visibilityChanged, owner, [this, k](bool v) {
                 if (stopped || applyingFlags)
                     return;
@@ -666,6 +777,7 @@ struct FloatingWindows::Impl {
             if (stopped || !panels[0])
                 return;
             const auto deadline = panels[0]->isVisible() ? monotonicMs() + HighlightDurationMs : 0;
+            int chatCount = 0;
             for (auto v : b) {
                 const auto event = v.toObject();
                 const qint64 n = QJsonDocument(event).toJson(QJsonDocument::Compact).size();
@@ -680,6 +792,26 @@ struct FloatingWindows::Impl {
                     const auto rawExtra = av(meta, 15).toObject().value("extra");
                     const auto extra = rawExtra.isObject() ? rawExtra.toObject()
                         : QJsonDocument::fromJson(rawExtra.toString().toUtf8()).object();
+                    const auto data = event.value("data").toObject();
+                    QString chatId;
+                    for (const auto &id : {extra.value("id_str"), event.value("msg_id"), data.value("id_str"), data.value("tid")}) {
+                        const auto key = id.isString() ? id.toString() :
+                            (id.toInteger() > 0 ? QString::number(id.toInteger()) : QString{});
+                        if (!key.isEmpty() && key != QStringLiteral("0") && key.size() <= 128) {
+                            chatId = key;
+                            break;
+                        }
+                    }
+                    if (!chatId.isEmpty()) {
+                        if (chatIds.contains(chatId))
+                            continue;
+                        chatIds.insert(chatId);
+                        recentChatIds.append(chatId);
+                        if (recentChatIds.size() > 1100)
+                            chatIds.remove(recentChatIds.takeFirst());
+                    }
+                    received.sequence = ++lastChatSequence;
+                    ++chatCount;
                     received.reply = extra.value("show_reply").toBool();
                     received.emotes = danmakuEmotes(av(info, 1).toString(), meta, extra);
                     for (const auto &emote : std::as_const(received.emotes)) {
@@ -690,9 +822,12 @@ struct FloatingWindows::Impl {
                 history.append(std::move(received));
                 historyBytes += n;
                 while (history.size() > 1100 || historyBytes > 8 * 1024 * 1024) {
-                    historyBytes -= history.takeFirst().bytes;
+                    const auto oldest = history.takeFirst();
+                    historyBytes -= oldest.bytes;
                 }
             }
+            if (chatFollow && chatCount)
+                chatFollow->messagesArrived(chatCount);
             if ((panels[0]->isVisible() || (docks[GiftDock] && docks[GiftDock]->isVisible())) &&
                 !renderTimer.isActive())
                 renderTimer.start();
@@ -701,6 +836,9 @@ struct FloatingWindows::Impl {
             if (stopped)
                 return;
             history = {};
+            chatIds.clear();
+            recentChatIds.clear();
+            if (chatFollow) chatFollow->reset();
             historyBytes = 0;
             watched = likes = QStringLiteral("—");
             messages.clear();
@@ -715,14 +853,6 @@ struct FloatingWindows::Impl {
         });
         QObject::connect(service.data(), &RoomRealtime::rankConfigChanged, owner,
                          [this] { loadChoices(true); });
-        QObject::connect(service.data(), &RoomRealtime::statusChanged, owner, [this](const QString &s) {
-            if (stopped)
-                return;
-            if (panels[0])
-                status[0]->setText(s);
-            if (panels[GiftDock])
-                status[GiftDock]->setText(s);
-        });
         QObject::connect(service.data(), &RoomRealtime::audienceChanged, owner,
                          [this] { renderRank(false); });
         QObject::connect(service.data(), &RoomRealtime::guardChanged, owner, [this] { renderRank(true); });
@@ -746,9 +876,22 @@ struct FloatingWindows::Impl {
     }
     HistoryView *view(DisplayListModel *m, QVBoxLayout *l) {
         auto v = new HistoryView;
+        enableUserMenu(v);
         v->setModel(m);
+        // QListView can retain an item's previous height after an async image arrives.
+        // Ask the view to measure the row again with the now-cached image.
+        QObject::connect(m, &QAbstractItemModel::dataChanged, v, [v](const QModelIndex &,
+                                 const QModelIndex &, const QList<int> &roles) {
+            if (roles.contains(Qt::SizeHintRole))
+                v->refreshRowSizes();
+        });
         l->addWidget(v, 1);
         return v;
+    }
+    void enableUserMenu(HistoryView *v) {
+        v->userMenu = [this, v](const DisplaySender &sender, QPoint globalPos) {
+            showChatUserMenu(v, service, sender.uid, sender.name, sender.message, globalPos);
+        };
     }
     QCheckBox *check(const QString &key, const QString &label, bool def, QFormLayout *f) {
         auto c = new QCheckBox(label);
@@ -774,6 +917,7 @@ struct FloatingWindows::Impl {
             auto *summary = new QLabel(dialog);
             layout->addWidget(summary);
             auto *view = new HistoryView(dialog);
+            enableUserMenu(view);
             view->setObjectName("entry-history-list");
             view->setAccessibleName(QStringLiteral("入场时间和观众"));
             const auto &entries = service->entryHistory();
@@ -879,6 +1023,9 @@ struct FloatingWindows::Impl {
         });
         QObject::connect(clear, &QPushButton::clicked, owner, [this] {
             history = {};
+            chatIds.clear();
+            recentChatIds.clear();
+            if (chatFollow) chatFollow->reset();
             historyBytes = 0;
             messages.clear();
             gifts.clear();
@@ -931,9 +1078,21 @@ struct FloatingWindows::Impl {
         giftView->resume = [this] { renderTimer.start(); };
         messageView = view(&messages, l);
         messageView->setObjectName("messageHistory");
+        chatFollow = new DanmakuFollow(messageView, DisplayListModel::MessageSequenceRole);
+        QObject::connect(chatFollow, &DanmakuFollow::latestRequested, owner, [this] { rebuild(true); });
+        auto updateHover = [this] {
+            if (stopped || !panels[0] || !chatFollow)
+                return;
+            auto hovered = [](HistoryView *v) { return v && v->isVisible() && v->hovered; };
+            chatFollow->setPaused(pause->isChecked() && (hovered(messageView) || hovered(giftView) || hovered(antiView)));
+        };
+        messageView->hoverChanged = updateHover;
+        giftView->hoverChanged = updateHover;
+        QObject::connect(pause, &QCheckBox::toggled, owner, updateHover);
         messageView->resume = [this] { renderTimer.start(); };
         buildDanmakuInput(l);
         antiView = view(&anti, l);
+        antiView->hoverChanged = updateHover;
         antiView->setObjectName("antiHistory");
         antiView->resume = [this] { renderTimer.start(); };
         updateAppearance();
@@ -992,7 +1151,7 @@ struct FloatingWindows::Impl {
             return;
         for (auto m : {&messages, &gifts, &anti, &audience, &guard})
             m->setAvatarsVisible(showAvatars->isChecked());
-        for (auto v : {messageView, giftView.data(), antiView}) {
+        for (auto v : {messageView.data(), giftView.data(), antiView.data()}) {
             if (!v)
                 continue;
             auto f = v->font();
@@ -1001,6 +1160,10 @@ struct FloatingWindows::Impl {
             v->pauseOnHover = pause->isChecked();
         }
         applyFlags(0);
+        // Leave room for a wrapped sender line and the tallest sticker even in a
+        // short dock. The outer scroll area handles the remaining panel controls.
+        const int line = messageView->fontMetrics().height();
+        messageView->setMinimumHeight(qBound(48, line * 3, 96) + line * 2 + 14 + 2 * messageView->frameWidth());
         if (giftView)
             giftView->setVisible(showGifts->isChecked());
         antiView->setVisible(showAnti->isChecked() && anti.rowCount() > 0);
@@ -1140,7 +1303,8 @@ struct FloatingWindows::Impl {
             QString rank = r.value("rank").toVariant().toString();
             if (!g && display.value("hide_rank_without_score").toInt() != 0 && score.toDouble() == 0)
                 rank.clear();
-            QString s = (rank.isEmpty() ? QString{} : rank + "  ") + privateDisplayName(r);
+            const QString prefix = rank.isEmpty() ? QString{} : rank + "  ";
+            QString s = prefix + privateDisplayName(r) + gloryBadge(r);
             if (!mystery(r)) {
                 const int level =
                     r.value("guard_level").toInt(u.value("guard").toObject().value("level").toInt());
@@ -1159,7 +1323,7 @@ struct FloatingWindows::Impl {
                 s += "\n" + metric + QStringLiteral("：") + score.toVariant().toString();
             }
             auto face = u.value("base").toObject().value("face").toString(r.value("face").toString());
-            model.append(s, mystery(r) ? QString{} : face);
+            model.append(s, mystery(r) ? QString{} : face, 0, {}, displaySender(r, int(prefix.size())));
         }
         auto state = g ? service->guardStatus() : service->audienceStatus();
         if (state.isEmpty())
@@ -1172,15 +1336,13 @@ struct FloatingWindows::Impl {
                                                   : QStringLiteral("已经到底了"));
         }
     }
-    void rebuild() {
-        if (stopped || !panels[0] || !stats)
+    void rebuild(bool jumpToLatest = false) {
+        if (stopped || !panels[0] || !stats || !chatFollow || !messageView || !antiView)
             return;
         auto hovered = [](const HistoryView *view) { return view && view->isVisible() && view->hovered; };
-        if (pause->isChecked() && (hovered(messageView) || hovered(giftView) || hovered(antiView)))
+        if (!jumpToLatest && pause->isChecked() && (hovered(messageView) || hovered(giftView) || hovered(antiView)))
             return;
-        const int oldScroll = messageView->verticalScrollBar()->value();
-        const bool hold = (pause->isChecked() && messageView->hovered) ||
-                          oldScroll < messageView->verticalScrollBar()->maximum() - 60;
+        chatFollow->beginRebuild();
         messages.clear();
         gifts.clear();
         anti.clear();
@@ -1192,7 +1354,7 @@ struct FloatingWindows::Impl {
             auto id = data.value("tid").toString(data.value("id_str").toString());
             if (id.isEmpty() && cmd == "SUPER_CHAT_MESSAGE")
                 id = data.value("id").toVariant().toString();
-            if (!id.isEmpty()) {
+            if (!received.sequence && !id.isEmpty()) {
                 id = cmd + ":" + id;
                 if (cmd == "SEND_GIFT")
                     id += ":" + data.value("giftId").toVariant().toString();
@@ -1215,8 +1377,9 @@ struct FloatingWindows::Impl {
                 auto meta = av(info, 0).toArray();
                 auto legacy = av(info, 2).toArray();
                 auto ext = av(meta, 15).toObject();
-                QJsonObject row{{"user", ext.value("user")}, {"name", av(legacy, 1)}};
+                QJsonObject row{{"user", ext.value("user")}, {"name", av(legacy, 1)}, {"uid", av(legacy, 0)}};
                 QString label = privateDisplayName(row);
+                label += gloryBadge(row, positiveId(av(av(info, 16).toArray(), 0)));
                 if (!mystery(row)) {
                     if (showMedal->isChecked()) {
                         auto m = av(info, 3).toArray();
@@ -1236,30 +1399,33 @@ struct FloatingWindows::Impl {
                 auto emotes = received.emotes;
                 for (auto &emote : emotes)
                     emote.start += int(prefix.size());
+                auto sender = displaySender(row);
+                const auto body = av(info, 1).toString();
+                sender.message = body;
                 messages.append(
-                    prefix + av(info, 1).toString(),
+                    prefix + body,
                     mystery(row)
                         ? QString{}
                         : ext.value("user").toObject().value("base").toObject().value("face").toString(),
-                    received.highlightDeadline, std::move(emotes));
+                    received.highlightDeadline, std::move(emotes), std::move(sender), received.sequence);
             } else if (cmd == "SEND_GIFT") {
                 if (paidOnly->isChecked() && data.value("coin_type") != "gold")
                     continue;
-                gifts.append(privateDisplayName(data) + QStringLiteral("  赠送 %1 × %2")
+                gifts.append(privateDisplayName(data) + gloryBadge(data) + QStringLiteral("  赠送 %1 × %2")
                                                             .arg(data.value("giftName").toString(),
                                                                  data.value("num").toVariant().toString()),
-                             mystery(data) ? QString{} : data.value("face").toString());
+                             mystery(data) ? QString{} : data.value("face").toString(), 0, {}, displaySender(data));
             } else if (cmd == "SUPER_CHAT_MESSAGE") {
                 QJsonObject row = data;
                 row.insert("name", data.value("user_info").toObject().value("uname"));
-                gifts.append(privateDisplayName(row) + QStringLiteral("  醒目留言：") +
-                             data.value("message").toString());
+                gifts.append(privateDisplayName(row) + gloryBadge(row) + QStringLiteral("  醒目留言：") +
+                             data.value("message").toString(), {}, 0, {}, displaySender(row));
             } else if (cmd == "USER_TOAST_MSG_V2") {
                 int op = data.value("guard_info").toObject().value("op_type").toInt();
                 if (!data.value("option").toObject().value("anchor_show").toBool() || op < 1 || op > 3)
                     continue;
-                gifts.append(privateDisplayName(data) + QStringLiteral("  大航海：") +
-                             data.value("guard_info").toObject().value("role_name").toString());
+                gifts.append(privateDisplayName(data) + gloryBadge(data) + QStringLiteral("  大航海：") +
+                             data.value("guard_info").toObject().value("role_name").toString(), {}, 0, {}, displaySender(data));
             } else if (cmd == "INTERACT_WORD" || cmd == "LIKE_INFO_V3_CLICK") {
                 QString kind = QStringLiteral("互动");
                 int t = data.value("msg_type").toInt();
@@ -1271,16 +1437,13 @@ struct FloatingWindows::Impl {
                     kind = QStringLiteral("分享");
                 if (cmd == "LIKE_INFO_V3_CLICK")
                     kind = QStringLiteral("点赞");
-                anti.append(privateDisplayName(data) + "  " + kind, {},
-                            cmd == "INTERACT_WORD" && t == 1 ? received.highlightDeadline : 0);
+                anti.append(privateDisplayName(data) + gloryBadge(data) + "  " + kind, {},
+                            cmd == "INTERACT_WORD" && t == 1 ? received.highlightDeadline : 0, {}, displaySender(data));
             }
         }
         stats->setText(QStringLiteral("看过 %1  ·  点赞 %2").arg(watched, likes));
         updateAppearance();
-        if (hold)
-            messageView->verticalScrollBar()->setValue(oldScroll);
-        else
-            messageView->scrollToBottom();
+        chatFollow->endRebuild();
         if (giftView)
             giftView->follow();
         antiView->follow();

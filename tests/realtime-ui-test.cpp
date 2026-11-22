@@ -1,11 +1,13 @@
 // Real presentation widgets with a main-thread, no-network realtime service double.
 #include "dock-focus.hpp"
+#include "display-asset-cache.hpp"
 #include "floating-windows.hpp"
 #include "moderation-alerts.hpp"
 #include "room-realtime.hpp"
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QContextMenuEvent>
 #include <QDeadlineTimer>
 #include <QDebug>
 #include <QDir>
@@ -22,6 +24,8 @@
 #include <QLineEdit>
 #include <QListView>
 #include <QMainWindow>
+#include <QMenu>
+#include <QMessageBox>
 #include <QNetworkProxy>
 #include <QLabel>
 #include <QPainter>
@@ -67,7 +71,7 @@ RoomRealtime::RoomRealtime(LiveController *c, QObject *p) : QObject(p), controll
         roomId_ = 456;
     }
     connect(this, &RoomRealtime::danmakuSendFinished, this, [this] { sendingDanmaku_ = false; });
-    status_ = QStringLiteral("离线合成数据 · 布局验证");
+    connection_.detail = QStringLiteral("离线合成数据 · 布局验证");
     audienceStatus_ = guardStatus_ = QStringLiteral("离线合成数据");
     audience_ = QJsonObject{
         {"item",
@@ -90,6 +94,11 @@ RoomRealtime::~RoomRealtime() = default;
 static QString lastType, lastSort;
 static int lastGuard = 0;
 static QStringList postedMessages;
+struct FixtureModeration { UserModeration action; qint64 uid; quint64 epoch; QString message; int durationHours; };
+static QList<FixtureModeration> fixtureModeration;
+void RoomRealtime::moderateUser(UserModeration action, qint64 uid, quint64 epoch, const QString &message, int durationHours) {
+    fixtureModeration.append({action, uid, epoch, message, durationHours});
+}
 void RoomRealtime::sendDanmaku(const QString &text) {
     postedMessages.append(text);
     sendingDanmaku_ = true;
@@ -805,6 +814,318 @@ static void checkDanmakuEmotes(LiveController &controller) {
           standaloneHeight >= colorRows(standaloneImage), "standalone emotes paint larger and reserve their own row height");
 }
 
+static void captureFeature(QWidget *panel, const QString &filename, QWidget *popup = nullptr) {
+    const auto folder = qEnvironmentVariable("LIVEHIME_UI_SCREENSHOTS");
+    if (folder.isEmpty()) return;
+    QDir().mkpath(folder);
+    const QRect panelRect(panel->mapToGlobal(QPoint()), panel->size());
+    const QRect popupRect = popup ? QRect(popup->mapToGlobal(QPoint()), popup->size()) : QRect{};
+    const auto area = panelRect.united(popupRect);
+    QPixmap shot(area.size());
+    shot.fill(panel->palette().window().color());
+    QPainter painter(&shot);
+    painter.drawPixmap(panelRect.topLeft() - area.topLeft(), panel->grab());
+    if (popup) painter.drawPixmap(popupRect.topLeft() - area.topLeft(), popup->grab());
+    painter.end();
+    check(shot.save(QDir(folder).filePath(filename)), "feature capture saved");
+}
+
+static void checkNarrowChatPreview(LiveController &controller) {
+    QTcpServer offline;
+    if (!offline.listen(QHostAddress::LocalHost)) { check(false, "loopback proxy available"); return; }
+    const auto previous = QNetworkProxy::applicationProxy();
+    const auto restore = qScopeGuard([&] { QNetworkProxy::setApplicationProxy(previous); });
+    QNetworkProxy::setApplicationProxy(QNetworkProxy(QNetworkProxy::HttpProxy, "127.0.0.1", offline.serverPort()));
+    QTemporaryDir dir;
+    QSettings settings(QDir(dir.path()).filePath("floating-windows.ini"), QSettings::IniFormat);
+    settings.setValue("gifts", false);
+    settings.setValue("anti", false);
+    settings.sync();
+    RoomRealtime service(&controller);
+    DisplayAssetCache cache;
+    FloatingWindows windows(&service, dir.path());
+    windows.showWindow(0);
+    auto *dock = windows.dockWidget(0);
+    dock->resize(335, 575);
+    auto *view = windows.panelWidget(0)->findChild<QListView *>("messageHistory");
+    auto *model = view ? dynamic_cast<DisplayListModel *>(view->model()) : nullptr;
+    check(model, "viewport verification uses the live message model and view");
+    if (!model) return;
+    model->setAssets(&cache, true);
+    using Phase = RealtimeConnection::Phase;
+    auto *indicator = dock->findChild<QLabel *>("realtimeConnectionIndicator");
+    check(indicator, "connection indicator belongs to the chat panel");
+    if (!indicator) return;
+    auto report = [&](Phase p, int attempt, QDeadlineTimer deadline, const QString &text) {
+        service.connectionChanged({p, attempt, deadline, text});
+    };
+    report(Phase::Connected, 0, QDeadlineTimer::Forever, QStringLiteral("弹幕已连接"));
+
+    auto chat = [](const QString &name, const QString &body) {
+        return QJsonObject{{"cmd", "DANMU_MSG"}, {"info", QJsonArray{QJsonArray{}, body, QJsonArray{41, name}}}};
+    };
+    QJsonArray earlier;
+    const QStringList lines{QStringLiteral("电台开播了"), QStringLiteral("今天也来听歌"),
+                            QStringLiteral("耳机已就位"), QStringLiteral("晚安，明天见")};
+    for (int i = 0; i < 40; ++i)
+        earlier.append(chat(QStringLiteral("听众 %1").arg(i + 1), lines[i % lines.size()]));
+    service.events(earlier);
+    settle(2000); // Let earlier message highlights expire before highlighting the last arrival.
+    const QString avatarUrl = QStringLiteral("https://i0.hdslb.com/bfs/test/avatar.png");
+    const QString emoteUrl = QStringLiteral("https://i0.hdslb.com/bfs/test/room.png");
+    const QString name = QStringLiteral("在海风里听晚间电台的长昵称观众");
+    const QJsonObject user{{"uid", 42}, {"base", QJsonObject{{"name", name}, {"face", avatarUrl}}},
+                           {"wealth", QJsonObject{{"level", 27}}}};
+    QJsonArray meta;
+    while (meta.size() < 16) meta.append(QJsonValue::Null);
+    meta[12] = 1;
+    meta[13] = QJsonObject{{"url", emoteUrl}};
+    meta[15] = QJsonObject{{"user", user}, {"extra", QJsonObject{{"show_reply", true}}}};
+    const QJsonArray info{meta, QStringLiteral("[晚安猫]"), QJsonArray{42, name}, QJsonArray{12, QStringLiteral("海边电台听友")}};
+    service.events({QJsonObject{{"cmd", "DANMU_MSG"}, {"info", info}}});
+    settle();
+    const auto last = model->index(model->rowCount() - 1);
+    check(last.data().toString().contains(QStringLiteral("回复")) &&
+          last.data().toString().contains(QStringLiteral("海边电台听友")) &&
+          last.data().toString().contains(QStringLiteral("荣耀 27")), "last message includes the wrapping reply, medal and glory");
+    QPixmap avatar(32, 32);
+    avatar.fill(QColor("#4b87a0"));
+    {
+        QPainter p(&avatar);
+        p.setPen(Qt::white);
+        p.drawText(avatar.rect(), Qt::AlignCenter, QStringLiteral("海"));
+    }
+    cache.storePreview(avatarUrl, DisplayAssetCache::Usage::Avatar, avatar);
+    settle();
+    auto *bar = view->verticalScrollBar();
+    const auto pending = view->visualRect(last);
+    check(bar->maximum() > 0 && bar->value() == bar->maximum() && !last.data(Qt::DecorationRole).value<QPixmap>().isNull() &&
+          last.data(DisplayListModel::EmoteImagesRole).toMap().isEmpty(), "at bottom with real avatar and pending large image");
+    captureFeature(dock, "01-highlight-and-placeholder.png");
+
+    const QColor top("#18c8ad"), bottom("#f8687e");
+    QPixmap sticker(96, 96);
+    sticker.fill(QColor("#ffdb95"));
+    {
+        QPainter p(&sticker);
+        p.fillRect(0, 0, 96, 6, top);
+        p.fillRect(0, 90, 96, 6, bottom);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor("#cf9145"));
+        p.drawPolygon(QPolygon({{14, 38}, {16, 12}, {38, 28}}));
+        p.drawPolygon(QPolygon({{57, 26}, {80, 13}, {81, 42}}));
+        p.setBrush(QColor("#efae62")); p.drawEllipse(QRect(10, 25, 77, 57));
+        p.setPen(QPen(QColor("#492d32"), 4, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(30, 51, 36, 48); p.drawLine(60, 48, 66, 51);
+        p.drawArc(QRect(39, 53, 18, 12), 180 * 16, 180 * 16);
+    }
+    cache.storePreview(emoteUrl, DisplayAssetCache::Usage::Emote, sticker);
+    settle(120);
+    const auto rect = view->visualRect(last);
+    const auto viewport = view->viewport()->rect();
+    const auto pixels = view->viewport()->grab().toImage().scaled(viewport.size());
+    auto bounds = [&](const QColor &color) {
+        QRect matched;
+        for (int y = 0; y < pixels.height(); ++y)
+            for (int x = 0; x < pixels.width(); ++x)
+                if (pixels.pixelColor(x, y) == color) matched |= QRect(x, y, 1, 1);
+        return matched;
+    };
+    const auto imageTop = bounds(top), imageBottom = bounds(bottom);
+    const auto height = qBound(48, view->fontMetrics().height() * 3, 96);
+    check(rect.height() > pending.height() && viewport.contains(rect.center()) && rect.bottom() <= viewport.bottom() &&
+          bar->value() == bar->maximum(), "asynchronous larger emote remeasures the last row and retains the bottom");
+    check(!imageTop.isEmpty() && !imageBottom.isEmpty() && rect.contains(imageTop) && rect.contains(imageBottom) &&
+          imageTop.top() >= rect.top() + view->fontMetrics().height() &&
+          qAbs(imageBottom.bottom() - imageTop.top() + 1 - height) <= 3,
+          "both edges of the full-height image actually paint below the wrapped sender prefix inside the real viewport");
+    captureFeature(dock, "02-full-emote-and-glory.png");
+
+    report(Phase::Reconnecting, 2, QDeadlineTimer(1900, Qt::PreciseTimer), QStringLiteral("离线测试：节点连接中断"));
+    settle();
+    const auto alarm = indicator->grab().toImage();
+    const auto red = alarm.pixelColor(5, 5);
+    check(indicator->isVisible() && indicator->property("connectionState") == "reconnecting" &&
+          indicator->text().contains(QStringLiteral("2 秒")) && red.red() > red.green() * 2,
+          "a disconnected chat visibly displays a red warning, retry delay and attempt");
+    captureFeature(dock, "03-connection-retry.png");
+    settle(1000);
+    check(indicator->text().contains(QStringLiteral("1 秒")) && indicator->text().contains(QStringLiteral("第 2 次")),
+          "backoff countdown advances while the attempt stays the same");
+    report(Phase::Reconnecting, 2, QDeadlineTimer::Forever, QStringLiteral("弹幕认证中"));
+    check(indicator->text().contains(QStringLiteral("正在进行第 2 次")), "authentication continues to show a reconnect in progress");
+    report(Phase::Connected, 0, QDeadlineTimer::Forever, QStringLiteral("弹幕已连接"));
+    settle();
+    const auto green = indicator->grab().toImage().pixelColor(5, 5);
+    check(indicator->text() == QStringLiteral("弹幕已连接") && green.green() > green.red(),
+          "successful recovery replaces the warning with a green connected status");
+    captureFeature(dock, "03-connection-restored.png");
+    if (qEnvironmentVariableIsEmpty("LIVEHIME_UI_SCREENSHOTS")) return;
+
+    auto pt = rect.topLeft() + QPoint(18, 18);
+    QContextMenuEvent rightClick(QContextMenuEvent::Mouse, pt, view->viewport()->mapToGlobal(pt));
+    QApplication::sendEvent(view->viewport(), &rightClick);
+    settle();
+    if (auto *menu = view->findChild<QMenu *>("chatUserMenu"); menu && menu->isVisible()) {
+        captureFeature(dock, "06-user-menu.png", menu);
+        const auto actions = menu->actions();
+        const auto mute = std::find_if(actions.cbegin(), actions.cend(), [](QAction *action) {
+            return action->text().startsWith(QStringLiteral("禁言"));
+        });
+        if (mute != actions.cend() && (*mute)->isEnabled() && (*mute)->menu())
+            (*mute)->menu()->actions().first()->trigger();
+        menu->close();
+        settle();
+        if (auto *confirm = view->findChild<QMessageBox *>("chatUserConfirm"); confirm && confirm->isVisible()) {
+            captureFeature(dock, "06-moderation-confirmation.png", confirm);
+            confirm->reject();
+        }
+    }
+    bar->triggerAction(QAbstractSlider::SliderPageStepSub);
+    settle();
+    service.events({chat(QStringLiteral("小鱼"), QStringLiteral("收到")), chat(QStringLiteral("阿树"), QStringLiteral("来了")),
+                    chat(QStringLiteral("小夏"), QStringLiteral("今天的歌单好听"))});
+    settle();
+    if (auto *bubble = view->findChild<QPushButton *>("danmakuUnread"); bubble && bubble->isVisible())
+        captureFeature(dock, "04-unread-bubble.png");
+}
+
+static void checkChatIdentityAndActions(LiveController &controller) {
+    QTemporaryDir dir;
+    QSettings settings(QDir(dir.path()).filePath("floating-windows.ini"), QSettings::IniFormat);
+    settings.setValue("font", 21);
+    settings.sync();
+    RoomRealtime service(&controller);
+    DisplayAssetCache cache;
+    FloatingWindows windows(&service, dir.path());
+    windows.showWindow(0);
+    windows.dockWidget(0)->resize(490, 660);
+    auto *view = windows.panelWidget(0)->findChild<QListView *>("messageHistory");
+    auto *model = dynamic_cast<DisplayListModel *>(view->model());
+    model->setAssets(&cache, true);
+    const QString avatar = "https://i0.hdslb.com/bfs/test/chat-sender.png";
+    QPixmap face(32, 32);
+    face.fill(Qt::blue);
+    cache.storePreview(avatar, DisplayAssetCache::Usage::Avatar, face);
+    const QJsonObject user{{"uid", "9876543210"}, {"base", QJsonObject{{"name", "Alice"}, {"face", avatar}}},
+                           {"wealth", QJsonObject{{"level", 23}}}};
+    auto chat = [](const QJsonObject &user, const QString &id, qint64 legacyUid = 9876543210LL) {
+        QJsonArray meta;
+        while (meta.size() < 15) meta.append(QJsonValue::Null);
+        meta.append(QJsonObject{{"user", user}, {"extra", QJsonObject{{"id_str", id}}}});
+        QJsonArray info{meta, "hello", QJsonArray{legacyUid, "legacy"}};
+        while (info.size() < 16) info.append(QJsonValue::Null);
+        info.append(QJsonArray{7});
+        return QJsonObject{{"cmd", "DANMU_MSG"}, {"info", info}, {"data", QJsonObject{{"tid", "shared"}}}};
+    };
+    auto hidden = user;
+    hidden.insert("is_mystery", 1);
+    const auto first = chat(user, "first");
+    service.events({first, first, chat({}, "second"), chat(hidden, "third"), chat(user, "conflict", 78)});
+    settle(140);
+    auto index = model->index(0);
+    const auto sender = index.data(DisplayListModel::SenderRole).value<DisplaySender>();
+    check(model->rowCount() == 4 && sender.name == "Alice" && sender.uid == 9876543210LL &&
+          sender.message == "hello" && index.data().toString().contains(QStringLiteral("[荣耀 23]")) &&
+          model->index(1).data().toString().contains(QStringLiteral("[荣耀 7]")),
+          "chat honours modern and legacy levels, binds the modern UID, and deduplicates by message ID");
+    check(model->index(2).data(DisplayListModel::SenderRole).value<DisplaySender>().uid == 0 &&
+          !model->index(2).data().toString().contains(QStringLiteral("荣耀")) &&
+          model->index(2).data(Qt::DecorationRole).value<QPixmap>().isNull(),
+          "mystery chat exposes no identity, glory or avatar");
+    check(!model->index(3).data(DisplayListModel::SenderRole).isValid(), "conflicting IDs suppress the sender menu");
+    auto menuAt = [&](QPoint pos) {
+        QContextMenuEvent event(QContextMenuEvent::Mouse, pos, view->viewport()->mapToGlobal(pos));
+        QApplication::sendEvent(view->viewport(), &event);
+        return view->findChild<QMenu *>("chatUserMenu");
+    };
+    auto removeClosed = [] { QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); };
+    const auto rect = view->visualRect(index);
+    check(!menuAt(rect.topRight() + QPoint(-2, 8)), "blank row area does not open the sender menu");
+    check(!menuAt(view->visualRect(model->index(2)).topLeft() + QPoint(8, 12)), "mystery sender has no menu");
+    const auto namePoint = rect.topLeft() + QPoint(6 + 38 + view->fontMetrics().horizontalAdvance("Alice") - 3,
+                                                   6 + view->fontMetrics().height() / 2);
+    const auto avatarPoint = rect.topLeft() + QPoint(20, 20);
+    check(!menuAt(namePoint + QPoint(view->fontMetrics().horizontalAdvance(" ["), 0)),
+          "the badge immediately after the large-font name is outside the sender menu");
+    auto *menu = menuAt(namePoint);
+    check(menu && menu->isVisible(), "right clicking the actual sender name opens the menu");
+    if (!menu) return;
+    QStringList labels;
+    for (auto *action : menu->actions())
+        if (!action->isSeparator()) labels.append(action->text());
+    check(labels == QStringList{QStringLiteral("拉黑"), QStringLiteral("禁言"), QStringLiteral("设置房管"),
+                                QStringLiteral("访问空间")}, "sender menu offers four distinct supported actions");
+    menu->close();
+    removeClosed();
+    fixtureModeration.clear();
+    auto confirmAvatarMute = [&]() -> QMessageBox * {
+        auto *popup = menuAt(avatarPoint);
+        check(popup && popup->isVisible(), "right clicking the avatar also opens the menu");
+        if (!popup) return nullptr;
+        for (auto *action : popup->actions()) {
+            if (action->text() != QStringLiteral("禁言") || !action->menu()) continue;
+            QStringList durations;
+            for (auto *choice : action->menu()->actions()) {
+                durations.append(choice->text());
+                if (choice->text() == QStringLiteral("4 小时")) choice->trigger();
+            }
+            check(durations == QStringList{QStringLiteral("2 小时"), QStringLiteral("4 小时"), QStringLiteral("24 小时")},
+                  "mute menu exposes the supported fixed durations");
+        }
+        popup->close();
+        removeClosed();
+        return view->findChild<QMessageBox *>("chatUserConfirm");
+    };
+    auto *confirm = confirmAvatarMute();
+    check(confirm && confirm->text().contains("9876543210") && confirm->text().contains(QStringLiteral("4 小时")) &&
+          confirm->defaultButton() == confirm->button(QMessageBox::Cancel),
+          "moderation confirmation identifies the UID and defaults to cancel");
+    if (!confirm) return;
+    confirm->button(QMessageBox::Cancel)->click();
+    removeClosed();
+    check(fixtureModeration.isEmpty(), "cancel never submits a moderation request");
+    confirm = confirmAvatarMute();
+    if (!confirm) return;
+    confirm->button(QMessageBox::Yes)->click();
+    removeClosed();
+    check(fixtureModeration.size() == 1 && fixtureModeration.first().uid == sender.uid &&
+          fixtureModeration.first().action == UserModeration::Mute && fixtureModeration.first().epoch == service.contextEpoch() &&
+          fixtureModeration.first().message == "hello" && fixtureModeration.first().durationHours == 4,
+          "confirmed mute sends exactly the selected user, duration and message");
+    service.moderationFinished(true, QStringLiteral("操作成功"));
+    auto *feedback = view->findChild<QMessageBox *>();
+    check(feedback && feedback->text().contains("9876543210") && feedback->text().contains(QStringLiteral("操作成功")),
+          "the platform response stays attached to the original sender and action");
+    if (feedback) feedback->accept();
+    removeClosed();
+    confirm = confirmAvatarMute();
+    if (!confirm) return;
+    service.contextChanged();
+    removeClosed();
+    check(!view->findChild<QMessageBox *>("chatUserConfirm") && fixtureModeration.size() == 1,
+          "switching rooms dismisses confirmation without submitting");
+
+    QJsonArray history;
+    for (int i = 0; i < 64; ++i) history.append(chat({}, QString::number(i + 10)));
+    service.events(history);
+    settle(200);
+    auto *bar = view->verticalScrollBar();
+    bar->triggerAction(QAbstractSlider::SliderPageStepSub);
+    settle();
+    auto *bubble = view->findChild<QPushButton *>("danmakuUnread");
+    const auto again = chat({}, "fresh");
+    service.events({again, again, chat({}, "also-fresh"), QJsonObject{{"cmd", "LIKE_INFO_V3_CLICK"}}});
+    settle(180);
+    check(bubble && bubble->isVisible() && bubble->text().contains(QStringLiteral("2 条新弹幕")) &&
+          model->rowCount() == history.size() + 2 && bar->value() < bar->maximum(),
+          "unread count and rendered rows agree on unique chats, excluding room activity");
+    if (bubble) bubble->click();
+    settle();
+    check(bubble && !bubble->isVisible() && bar->value() == bar->maximum(), "bubble returns to the latest chat");
+}
+
 static void checkLiveHighlights(LiveController &controller) {
     QTemporaryDir dir;
     RoomRealtime service(&controller);
@@ -829,6 +1150,10 @@ static void checkLiveHighlights(LiveController &controller) {
     check(difference(early, 12) > difference(middle, 12) && difference(middle, 12) > 0 &&
           difference(early, 12) > difference(early, 205) && paintHighlight(messages, -50) == idle,
           "row background weakens across its width and fades completely by its deadline");
+    const auto fresh = paintHighlight(messages, 1750);
+    check(difference(fresh, 12) >= 145 && difference(fresh, 205) >= 35 &&
+          difference(fresh, 1) > difference(fresh, 12),
+          "fresh highlights visibly cover the whole row with a stronger leading stripe");
 
     auto deadline = [](QListView *view, int row) {
         return view->model()->index(row, 0).data(DisplayListModel::HighlightDeadlineRole).toLongLong();
@@ -951,6 +1276,8 @@ int main(int argc, char **argv) {
     RoomRealtime service(&controller);
     checkDockFocus(service);
     checkLiveHighlights(controller);
+    checkChatIdentityAndActions(controller);
+    checkNarrowChatPreview(controller);
     checkDanmakuEmotes(controller);
     checkLockedDanmaku(service);
     checkSignedOutDanmaku();

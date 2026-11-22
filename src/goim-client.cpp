@@ -61,6 +61,7 @@ class GoimWorker final : public QObject {
   signals:
     void events(quint64 generation, QJsonArray events);
     void statusChanged(quint64 generation, QString status);
+    void connectionProgress(quint64 generation, GoimClient::Progress phase, QString detail, QDeadlineTimer retryAt);
     void tokenRefreshRequested(quint64 generation);
     void endpointFailed(quint64 generation);
     void transportPacketObserved(quint64 generation, quint32 operation);
@@ -74,6 +75,10 @@ class GoimWorker final : public QObject {
     }
 
   private:
+    void report(GoimClient::Progress phase, const QString &detail, QDeadlineTimer retryAt = QDeadlineTimer::Forever) {
+        emit statusChanged(generation_, detail);
+        emit connectionProgress(generation_, phase, detail, retryAt);
+    }
     void send(quint32 op, const QByteArray &body = {}) {
         if (!socket_ || socket_->state() != QAbstractSocket::ConnectedState)
             return;
@@ -106,9 +111,9 @@ class GoimWorker final : public QObject {
             emit endpointFailed(generation_);
             return;
         }
-        emit statusChanged(generation_, QStringLiteral("弹幕连接中断，正在重连"));
-        if (!retry_->isActive())
-            retry_->start(1000);
+        retry_->start(1000);
+        report(GoimClient::Progress::Waiting, QStringLiteral("弹幕连接中断，正在重连"),
+               QDeadlineTimer(retry_->remainingTime(), Qt::PreciseTimer));
     }
     void connectSocket() {
         if (stopped_)
@@ -149,13 +154,14 @@ class GoimWorker final : public QObject {
                               {"support_ack", true},
                               {"queue_uuid", queue_}};
             send(7, QJsonDocument(login).toJson(QJsonDocument::Compact));
-            emit statusChanged(generation_, QStringLiteral("弹幕认证中"));
+            if (socket_)
+                report(GoimClient::Progress::Connecting, QStringLiteral("弹幕认证中"));
         });
         connect(socket_, &QTcpSocket::errorOccurred, this,
                 [this](QAbstractSocket::SocketError) { failed(); });
         connect(socket_, &QTcpSocket::disconnected, this, &GoimWorker::failed);
         connect(socket_, &QTcpSocket::readyRead, this, [this] { receive(); });
-        emit statusChanged(generation_, QStringLiteral("弹幕连接中"));
+        report(GoimClient::Progress::Connecting, QStringLiteral("弹幕连接中"));
         deadline_->start(15000);
         socket_->connectToHost(host_, port_);
     }
@@ -197,7 +203,7 @@ class GoimWorker final : public QObject {
                     authenticated_ = true;
                     deadline_->start(60000);
                     heartbeat_->start();
-                    emit statusChanged(generation_, QStringLiteral("弹幕已连接"));
+                    report(GoimClient::Progress::Connected, QStringLiteral("弹幕已连接"));
                 } else if (packet.operation == 3) {
                     if (packet.body.size() != 4) {
                         failed();
@@ -292,6 +298,11 @@ GoimClient::GoimClient(QObject *parent) : QObject(parent), worker_(new GoimWorke
         if (generation == generation_)
             emit statusChanged(status);
     });
+    connect(worker_, &GoimWorker::connectionProgress, this,
+            [this](quint64 generation, Progress phase, const QString &detail, QDeadlineTimer retryAt) {
+                if (generation == generation_)
+                    emit connectionProgress(phase, detail, retryAt);
+            });
     connect(worker_, &GoimWorker::tokenRefreshRequested, this, [this](quint64 generation) {
         if (generation == generation_)
             emit tokenRefreshRequested();

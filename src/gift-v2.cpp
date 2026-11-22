@@ -7,7 +7,7 @@
 namespace livehime {
 namespace {
 constexpr int MaxGifts = 128;
-enum class Schema { Root, Gift, User, Base, Anon, Medal, Material };
+enum class Schema { Root, Gift, User, Base, Anon, Medal, Material, Wealth };
 struct Field {
     const char *name = nullptr;
     bool number = false;
@@ -32,6 +32,8 @@ Field field(Schema schema, quint32 id) {
             return {"gift_list", false, false, true, Schema::Gift};
         case 11:
             return {"switch", true, true};
+        case 13:
+            return {"wealth_info", false, false, true, Schema::Wealth};
         case 15:
             return {"sender_uinfo", false, false, true, Schema::User};
         }
@@ -64,6 +66,8 @@ Field field(Schema schema, quint32 id) {
         case 35:
             return {"gift_info", false, false, true, Schema::Material};
         }
+    } else if (schema == Schema::Wealth && id == 1) {
+        return {"level", true};
     } else if (schema == Schema::User) {
         if (id == 1)
             return {"uid", true};
@@ -197,7 +201,11 @@ QJsonArray decodeGiftV2Payload(const QByteArray &payload) {
     const bool anonymous = base.value("is_mystery").toBool() || !user.value("anon").toObject().isEmpty();
     QString name = base.value("name").toString(root.value("uname").toString());
     QString face = base.value("face").toString(root.value("face").toString());
-    qint64 uid = user.value("uid").toInteger(root.value("uid").toInteger());
+    const qint64 rootUid = root.value("uid").toInteger();
+    const qint64 senderUid = user.value("uid").toInteger();
+    qint64 uid = senderUid > 0 ? senderUid : rootUid;
+    if (rootUid > 0 && senderUid > 0 && rootUid != senderUid)
+        uid = 0;
     if (anonymous) {
         name = QStringLiteral("神秘用户");
         face.clear();
@@ -223,6 +231,8 @@ QJsonArray decodeGiftV2Payload(const QByteArray &payload) {
         data.insert("sender_uinfo", user);
         data.insert("is_mystery", anonymous);
         data.insert("guard_level", root.value("guard_level"));
+        if (!anonymous && root.contains("wealth_info"))
+            data.insert("wealth_info", root.value("wealth_info"));
         if (!anonymous && root.contains("medal_info"))
             data.insert("medal_info", root.value("medal_info"));
         QJsonObject event{{"cmd", "SEND_GIFT"}, {"data", data}};

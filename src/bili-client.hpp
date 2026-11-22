@@ -31,6 +31,8 @@ public:
     void startLive(qint64 roomId, int areaId, Callback<LiveSession> callback);
     void stopLive(qint64 roomId, Callback<Done> callback);
     QNetworkReply *sendDanmaku(qint64 roomId, const QString &text, Callback<Done> callback);
+    QNetworkReply *moderateUser(UserModeration action, qint64 anchorId, qint64 roomId, qint64 targetUid,
+                                const QString &message, int durationHours, Callback<Done> callback);
     QNetworkReply *fetchRealtime(const protocol::Request &request, Callback<QJsonObject> callback);
     void cancelRealtime(QNetworkReply *reply);
 

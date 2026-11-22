@@ -215,6 +215,42 @@ Request sendDanmaku(qint64 roomId, const QString &text, const QByteArray &csrf, 
     return {"POST", QUrl(QString::fromLatin1(LiveApi) + "/xlive/app-room/v1/dM/sendmsg"),
             serialize(body), serialize(p)};
 }
+Request moderateUser(UserModeration action, qint64 anchorId, qint64 roomId, qint64 targetUid,
+                     const QString &message, const QByteArray &csrf, qint64 now, int durationHours)
+{
+    if (anchorId <= 0 || roomId <= 0 || targetUid <= 0 || targetUid == anchorId || csrf.isEmpty())
+        return {};
+    auto p = common(now);
+    const auto target = QByteArray::number(targetUid);
+    QString path;
+    switch (action) {
+    case UserModeration::Block:
+        path = QStringLiteral("/xlive/app-ucenter/v2/xbanned/banned/AddBlack");
+        p["anchor_id"] = QByteArray::number(anchorId);
+        p["tuid"] = target;
+        break;
+    case UserModeration::Mute:
+        if (!validMuteDuration(durationHours)) return {};
+        path = QStringLiteral("/xlive/web-ucenter/v1/banned/AddSilentUser");
+        p["room_id"] = QByteArray::number(roomId);
+        p["tuid"] = target;
+        p["msg"] = message.toUtf8();
+        p["hour"] = QByteArray::number(durationHours);
+        p["type"] = "1";
+        break;
+    case UserModeration::AppointAdmin:
+        path = QStringLiteral("/xlive/app-ucenter/v1/roomAdmin/appoint");
+        p["mobi_app"] = "pc_link";
+        p["uid"] = target;
+        p["admin_level"] = "1"; // Standard moderator.
+        break;
+    default:
+        return {};
+    }
+    auto body = signedParams(p);
+    addCsrf(body, csrf);
+    return {"POST", QUrl(QString::fromLatin1(LiveApi) + path), serialize(body), serialize(p)};
+}
 Request contributionRank(qint64 uid, qint64 roomId, const QString &type, const QString &sort, qint64 now)
 {
     auto p = common(now);

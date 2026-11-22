@@ -100,6 +100,32 @@ void protocolVectors()
     fields["sign"] = p::signature(fields);
     fields["csrf"] = fields["csrf_token"] = "synthetic-csrf";
     check(danmaku.body == p::serialize(fields), "native danmaku encodes text and appends CSRF after signature");
+    const qint64 targetUid = 4890123456789LL;
+    const auto checkModeration = [&](UserModeration action, const QString &path, p::Params extras, int durationHours = 2) {
+        const auto request = p::moderateUser(action, 111, 222, targetUid, text, "offline-csrf", startedAt.toSecsSinceEpoch(), durationHours);
+        auto expected = p::common(startedAt.toSecsSinceEpoch());
+        expected.insert(extras.begin(), extras.end());
+        check(request.method == "POST" && request.url == QUrl("https://api.live.bilibili.com" + path) &&
+              request.signedBytes == p::serialize(expected), "native moderation endpoint and signed fields");
+        expected["sign"] = p::signature(expected);
+        expected["csrf"] = expected["csrf_token"] = "offline-csrf";
+        check(request.body == p::serialize(expected), "native moderation appends CSRF after signing");
+    };
+    checkModeration(UserModeration::Block, "/xlive/app-ucenter/v2/xbanned/banned/AddBlack",
+                    {{"anchor_id", "111"}, {"tuid", "4890123456789"}});
+    for (const auto hours : {2, 4, 24})
+        checkModeration(UserModeration::Mute, "/xlive/web-ucenter/v1/banned/AddSilentUser",
+                        {{"room_id", "222"}, {"tuid", "4890123456789"}, {"msg", text.toUtf8()},
+                         {"hour", QByteArray::number(hours)}, {"type", "1"}}, hours);
+    checkModeration(UserModeration::AppointAdmin, "/xlive/app-ucenter/v1/roomAdmin/appoint",
+                    {{"mobi_app", "pc_link"}, {"uid", "4890123456789"}, {"admin_level", "1"}});
+    check(p::moderateUser(UserModeration::Block, 111, 222, 111, {}, "csrf", 1).url.isEmpty() &&
+          p::moderateUser(UserModeration::Block, 111, 222, 0, {}, "csrf", 1).url.isEmpty() &&
+          p::moderateUser(UserModeration::Block, 111, 0, targetUid, {}, "csrf", 1).url.isEmpty() &&
+          p::moderateUser(UserModeration::Mute, 111, 222, targetUid, {}, "csrf", 1, -1).url.isEmpty() &&
+          p::moderateUser(UserModeration::Mute, 111, 222, targetUid, {}, "csrf", 1, 1).url.isEmpty() &&
+          p::moderateUser(UserModeration::Mute, 111, 222, targetUid, {}, {}, 1).url.isEmpty(),
+          "invalid management target or missing CSRF cannot produce a mutation");
     check(p::validDanmakuText(text) && !p::validDanmakuText("  ") && !p::validDanmakuText("a\nb") &&
           !p::validDanmakuText(QString(QChar(0xd800))), "validate single-line Unicode danmaku");
     check(errorKind(p::envelope(R"({"code":0})", true), ApiError::Kind::InvalidResponse) &&

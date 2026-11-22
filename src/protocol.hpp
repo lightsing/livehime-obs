@@ -30,6 +30,7 @@ template<class T> using Callback = std::function<void(Result<T>)>;
 using Done = std::monostate;
 
 struct UserInfo { qint64 uid = 0; QString name; };
+enum class UserModeration { Block, Mute, AppointAdmin };
 struct AreaInfo { int id = 0; int parentId = 0; QString name; QString parentName; };
 struct RoomInfo {
     qint64 roomId = 0;
@@ -75,6 +76,9 @@ Request preLive(qint64 timestampSeconds);
 Request danmuInfo(qint64 roomId, qint64 timestampSeconds);
 bool validDanmakuText(const QString &text);
 Request sendDanmaku(qint64 roomId, const QString &text, const QByteArray &csrf, const QDateTime &sentAt);
+Request moderateUser(UserModeration action, qint64 anchorId, qint64 roomId, qint64 targetUid,
+                     const QString &message, const QByteArray &csrf, qint64 timestampSeconds, int durationHours = 2);
+inline bool validMuteDuration(int hours) { return hours == 2 || hours == 4 || hours == 24; }
 Request contributionRank(qint64 uid, qint64 roomId, const QString &type, const QString &sort, qint64 timestampSeconds);
 Request guardRank(qint64 uid, qint64 roomId, int typ, int page, qint64 timestampSeconds);
 Request cover(const QUrl &location, const QByteArray &csrf, const QByteArray &visitId);

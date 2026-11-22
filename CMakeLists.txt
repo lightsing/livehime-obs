@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(livehime-obs VERSION 0.4.2 LANGUAGES C CXX)
+project(livehime-obs VERSION 0.4.3 LANGUAGES C CXX)
 
 include(cmake/ObsSdk.cmake)
 set(CMAKE_CXX_STANDARD 20)
@@ -198,6 +198,8 @@ if(BUILD_TESTING)
   add_test(NAME realtime-state-isolation COMMAND realtime-state-test)
   set_tests_properties(realtime-state-isolation PROPERTIES TIMEOUT 30 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit")
   add_executable(realtime-ui-test tests/realtime-ui-test.cpp src/floating-windows.cpp src/floating-windows.hpp
+    src/chat-user-menu.cpp src/chat-user-menu.hpp src/danmaku-follow.cpp src/danmaku-follow.hpp
+    src/connection-indicator.cpp src/connection-indicator.hpp
     src/danmaku-emotes.cpp src/danmaku-emotes.hpp
     src/danmaku-input-row.cpp src/danmaku-input-row.hpp
     src/dock-focus.cpp src/dock-focus.hpp src/display-asset-cache.cpp src/display-asset-cache.hpp src/room-realtime.hpp src/live-controller.hpp
@@ -208,6 +210,13 @@ if(BUILD_TESTING)
   target_compile_definitions(realtime-ui-test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
   target_compile_options(realtime-ui-test PRIVATE /W4 /permissive- /utf-8 /EHsc)
   add_test(NAME realtime-floating-windows COMMAND realtime-ui-test)
+  add_executable(danmaku-follow-test tests/danmaku-follow-test.cpp src/danmaku-follow.cpp src/danmaku-follow.hpp)
+  target_include_directories(danmaku-follow-test PRIVATE src)
+  target_link_libraries(danmaku-follow-test PRIVATE Qt6::Widgets)
+  target_compile_options(danmaku-follow-test PRIVATE /W4 /permissive- /utf-8 /EHsc)
+  add_test(NAME danmaku-unread-follow COMMAND danmaku-follow-test)
+  set_tests_properties(danmaku-unread-follow PROPERTIES TIMEOUT 30 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit"
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QPA_PLATFORM_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins/platforms;QT_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins")
   set_tests_properties(realtime-floating-windows PROPERTIES TIMEOUT 45 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit"
     ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QPA_PLATFORM_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins/platforms;QT_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins")
   add_executable(danmaku-emotes-test tests/danmaku-emotes-test.cpp src/danmaku-emotes.cpp src/danmaku-emotes.hpp

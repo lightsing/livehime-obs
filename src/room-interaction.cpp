@@ -4,11 +4,16 @@
 #include <limits>
 namespace livehime {
 namespace {
-enum class Part { Event, User, Base };
+enum class Part { Event, User, Base, Wealth };
 struct Interaction {
     QString name, baseName;
-    qint64 type = 0, timestamp = 0, room = 0;
-    bool anonymous = false;
+    qint64 type = 0, timestamp = 0, room = 0, uid = 0, glory = 0;
+    bool anonymous = false, conflictingUid = false;
+    void observeUid(qint64 candidate) {
+        if (candidate <= 0) return;
+        if (uid > 0 && uid != candidate) conflictingUid = true;
+        uid = candidate;
+    }
 };
 bool parseFields(QByteArrayView bytes, Part part, Interaction &event, int &budget) {
     protobuf::Reader reader{bytes, 0, budget};
@@ -16,12 +21,16 @@ bool parseFields(QByteArrayView bytes, Part part, Interaction &event, int &budge
         quint32 id, wire;
         if (!reader.next(id, wire))
             return false;
-        if ((part == Part::Event && (id == 5 || id == 6 || id == 7 || id == 21)) ||
-            (part == Part::Base && id == 4)) {
+        if ((part == Part::Event && (id == 1 || id == 5 || id == 6 || id == 7 || id == 21)) ||
+            (part == Part::Base && id == 4) || ((part == Part::User || part == Part::Wealth) && id == 1)) {
             quint64 value;
             if (wire != 0 || !reader.varint(value) || value > quint64(std::numeric_limits<qint64>::max()))
                 return false;
-            if (part == Part::Base || id == 21)
+            if (part == Part::Wealth)
+                event.glory = static_cast<qint64>(value);
+            else if (id == 1)
+                event.observeUid(static_cast<qint64>(value));
+            else if (part == Part::Base || id == 21)
                 event.anonymous |= value != 0;
             else if (id == 5)
                 event.type = static_cast<qint64>(value);
@@ -38,20 +47,23 @@ bool parseFields(QByteArrayView bytes, Part part, Interaction &event, int &budge
             if (decoder.hasError())
                 return false;
             (part == Part::Base ? event.baseName : event.name) = text.left(120);
-        } else if ((part == Part::Event && id == 22) || (part == Part::User && (id == 2 || id == 9))) {
+        } else if ((part == Part::Event && id == 22) || (part == Part::User && (id == 2 || id == 4 || id == 9))) {
             QByteArrayView child;
             if (wire != 2 || !reader.slice(child))
                 return false;
             if (part == Part::User && id == 9)
                 event.anonymous |= !child.isEmpty();
-            else if (!parseFields(child, part == Part::Event ? Part::User : Part::Base, event, budget))
+            else if (!parseFields(child, part == Part::Event ? Part::User : (id == 4 ? Part::Wealth : Part::Base),
+                                  event, budget))
                 return false;
         } else if (!reader.skip(wire, id, static_cast<int>(part)))
             return false;
     }
     return true;
 }
-bool marked(const QJsonValue &v) { return v.toBool() || v.toInteger() != 0; }
+bool marked(const QJsonValue &v) {
+    return v.toBool() || v.toInteger() != 0 || v.toString() == "1" || v.toString() == "true";
+}
 qint64 integer(const QJsonValue &v) { return v.isString() ? v.toString().toLongLong() : v.toInteger(); }
 bool differentRoom(const QJsonObject &object, qint64 roomId) {
     for (auto key : {"roomid", "room_id"}) {
@@ -75,20 +87,24 @@ std::optional<QJsonObject> roomInteraction(const QJsonObject &event, qint64 room
             (interaction.room && interaction.room != roomId))
             return {};
     } else if (cmd == "INTERACT_WORD") {
-        QJsonObject user;
+        interaction.observeUid(integer(data.value("uid")));
         for (auto key : {"uinfo", "sender_uinfo", "user", "user_info"}) {
-            user = data.value(QLatin1String(key)).toObject();
-            if (!user.isEmpty())
-                break;
+            const auto user = data.value(QLatin1String(key)).toObject();
+            const auto base = user.value("base").toObject();
+            interaction.observeUid(integer(user.value("uid")));
+            interaction.anonymous |= marked(base.value("is_mystery")) || marked(user.value("is_mystery")) ||
+                                     !user.value("anon").toObject().isEmpty();
+            if (interaction.baseName.isEmpty())
+                interaction.baseName = base.value("name").toString().left(120);
+            if (interaction.glory <= 0)
+                interaction.glory = integer(user.value("wealth").toObject().value("level"));
         }
-        const auto base = user.value("base").toObject();
+        if (interaction.glory <= 0)
+            interaction.glory = integer(data.value("wealth_level"));
         interaction.type = integer(data.value("msg_type"));
         interaction.timestamp = integer(data.value("timestamp"));
         interaction.name = data.value("uname").toString(
             data.value("name").toString(data.value("username").toString())).left(120);
-        interaction.baseName = base.value("name").toString().left(120);
-        interaction.anonymous = marked(base.value("is_mystery")) || marked(user.value("is_mystery")) ||
-                                !user.value("anon").toObject().isEmpty();
     } else
         return {};
     interaction.anonymous |= marked(data.value("is_mystery")) || !data.value("anon").toObject().isEmpty();
@@ -101,6 +117,10 @@ std::optional<QJsonObject> roomInteraction(const QJsonObject &event, qint64 room
         name = QStringLiteral("观众");
     QJsonObject normalized{{"msg_type", interaction.type}, {"timestamp", interaction.timestamp},
                            {"uname", name}, {"is_mystery", interaction.anonymous}};
+    if (!interaction.anonymous && !interaction.conflictingUid && interaction.uid > 0)
+        normalized.insert("uid", interaction.uid);
+    if (!interaction.anonymous && interaction.glory > 0)
+        normalized.insert("wealth_level", interaction.glory);
     for (auto key : {"tid", "id_str"}) {
         const auto id = data.value(QLatin1String(key)).toString();
         if (!id.isEmpty() && id.size() <= 128)

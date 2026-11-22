@@ -77,6 +77,18 @@ int main(int argc, char **argv) {
     check(existingRow.size() == 1 && updatedRow == existingRow,
           "8.15 gift extensions retain displayed fields");
     const auto anon = bytes(9, number(5, 1));
+    const auto wealth = bytes(13, number(1, 28));
+    const auto giftWithGlory = decodeGiftV2(event(valid + wealth + bytes(15, user)));
+    const auto conflict = decodeGiftV2(event(valid + number(1, 97) + bytes(15, user)));
+    check(conflict.size() == 1 && !conflict.first().toObject().value("data").toObject()
+              .value("sender_uinfo").toObject().value("uid").toInteger() &&
+          !conflict.first().toObject().value("data").toObject().value("uid").toInteger(),
+          "conflicting gift sender IDs cannot be used for moderation");
+    const auto hiddenGlory = decodeGiftV2(event(valid + wealth + bytes(15, user + anon)));
+    check(giftWithGlory.size() == 1 && giftWithGlory.first().toObject().value("data").toObject()
+              .value("wealth_info").toObject().value("level").toInteger() == 28 &&
+          hiddenGlory.size() == 1 && !hiddenGlory.first().toObject().value("data").toObject().contains("wealth_info"),
+          "gift glory level is available only on an identifiable sender");
     const auto existingAnonRow = decodeGiftV2(event(valid + bytes(15, user + anon)));
     const auto updatedAnonRow =
         decodeGiftV2(event(updatedGift + bytes(15, user + bytes(3, senderMedal) + anon)));

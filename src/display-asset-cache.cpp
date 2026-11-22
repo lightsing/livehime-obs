@@ -86,6 +86,17 @@ QPixmap DisplayAssetCache::cachedEmote(const QString &normalizedUrl) const {
     const auto *pixmap = emotes_.object(normalizedUrl);
     return pixmap ? *pixmap : QPixmap{};
 }
+void DisplayAssetCache::storePreview(const QString &url, Usage usage, const QPixmap &preview) {
+    if (preview.isNull())
+        return;
+    auto &cache = usage == Usage::Emote ? emotes_ : avatars_;
+    const auto cost = (preview.width() * preview.height() * 4 + 1023) / 1024;
+    cache.insert(url, new QPixmap(preview), cost);
+    if (usage == Usage::Emote)
+        emit emoteReady(url);
+    else
+        emit ready(url);
+}
 
 QPixmap DisplayAssetCache::requestPreview(const QString &url, Usage usage) {
     const Key key{url, usage};
@@ -139,23 +150,13 @@ void DisplayAssetCache::pump() {
                 const auto mime = reply->rawHeader("Content-Type").split(';').value(0).trimmed().toLower();
                 preview = decodePreview(*bytes, mime, emote);
             }
-            if (preview.isNull()) {
+            if (preview.isNull())
                 failures_.insert(key, new QDeadlineTimer(30000));
-            } else {
-                auto &cache = emote ? emotes_ : avatars_;
-                const auto cost = (preview.width() * preview.height() * 4 + 1023) / 1024;
-                cache.insert(key.first, new QPixmap(preview), cost);
-            }
             requested_.remove(key);
             reply->deleteLater();
             --active_;
             pump();
-            if (!preview.isNull()) {
-                if (emote)
-                    emit emoteReady(key.first);
-                else
-                    emit ready();
-            }
+            storePreview(key.first, key.second, preview);
         });
     }
 }

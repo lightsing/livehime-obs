@@ -4,7 +4,11 @@
 #undef main
 #include "room-realtime.hpp"
 #include "goim-client.hpp"
+#include "room-interaction.hpp"
+#include "goim-codec.hpp"
 #include <QJsonDocument>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QUrlQuery>
 
 namespace {
@@ -14,6 +18,14 @@ struct Read {
 };
 QList<Read> reads;
 QList<Callback<Done>> sends;
+struct ModerationWrite {
+    UserModeration action;
+    qint64 anchor, room, target;
+    QString message;
+    int durationHours;
+    Callback<Done> complete;
+};
+QList<ModerationWrite> management;
 qint64 sentRoom = 0;
 QString sentText;
 int findRead(const QString &path, int start = 0) {
@@ -25,6 +37,59 @@ int findRead(const QString &path, int start = 0) {
 void reply(int index, QJsonObject data) {
     auto cb = reads[index].callback;
     cb(data);
+}
+bool waitForConnection(std::function<bool()> ready) {
+    QDeadlineTimer timeout(4000);
+    while (!ready() && !timeout.hasExpired()) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    return ready();
+}
+void checkReconnect(RoomRealtime &service, int configRequest) {
+    using Phase = RealtimeConnection::Phase;
+    QTcpServer server;
+    if (!server.listen(QHostAddress::LocalHost)) {
+        check(false, "local-only danmaku test server listens");
+        return;
+    }
+    const QJsonObject host{{"host", "127.0.0.1"}, {"port", server.serverPort()}};
+    reply(configRequest, QJsonObject{{"token", "offline"}, {"ip_list", QJsonArray{host}}});
+    auto nextPeer = [&]() -> QTcpSocket * {
+        if (!waitForConnection([&] { return server.hasPendingConnections(); })) return nullptr;
+        auto *peer = server.nextPendingConnection();
+        return waitForConnection([&] { return peer->bytesAvailable() > 0; }) ? peer : nullptr;
+    };
+    const auto auth = GoimCodec::frame(8, 1, QByteArrayLiteral("{\"code\":0}"));
+    auto *peer = nextPeer();
+    check(peer && service.connection().phase == Phase::Connecting, "initial TCP connection waits for room authentication");
+    if (!peer) return;
+    peer->write(auth);
+    check(waitForConnection([&] { return service.connection().phase == Phase::Connected; }),
+          "a successful GOIM authentication makes the room connected");
+    peer->abort();
+    check(waitForConnection([&] {
+        auto state = service.connection();
+        return state.phase == Phase::Reconnecting && state.attempt == 1 && state.retryAt.remainingTime() > 0;
+    }), "a real disconnect reports the scheduled first retry");
+    peer = nextPeer();
+    check(peer && service.connection().phase == Phase::Reconnecting && service.connection().attempt == 1 &&
+          service.connection().retryAt.isForever(), "reconnecting stays in alarm state until re-authenticated");
+    if (!peer) return;
+    peer->write(auth);
+    check(waitForConnection([&] {
+        return service.connection().phase == Phase::Connected && service.connection().attempt == 0;
+    }), "successful reconnection clears the alarm and retry count");
+    const int beforeRefresh = reads.size();
+    peer->write(GoimCodec::frame(8, 2, QByteArrayLiteral("{\"code\":-101}")));
+    check(waitForConnection([&] { return reads.size() > beforeRefresh && service.connection().attempt == 1; }),
+          "token expiry reports an immediate first recovery attempt");
+    if (reads.size() <= beforeRefresh) return;
+    reply(beforeRefresh, QJsonObject{});
+    const auto retry = service.connection();
+    check(retry.phase == Phase::Reconnecting && retry.attempt == 2 &&
+          retry.retryAt.remainingTime() >= 8000 && retry.retryAt.remainingTime() <= 11000,
+          "unusable fresh endpoints show the next numbered attempt and the configuration backoff");
 }
 } // namespace
 namespace livehime {
@@ -39,6 +104,11 @@ QNetworkReply *BiliClient::sendDanmaku(qint64 roomId, const QString &text, Callb
     return nullptr;
 }
 void BiliClient::cancelRealtime(QNetworkReply *) {}
+QNetworkReply *BiliClient::moderateUser(UserModeration action, qint64 anchorId, qint64 roomId, qint64 targetUid,
+                                       const QString &message, int durationHours, Callback<Done> callback) {
+    management.append({action, anchorId, roomId, targetUid, message, durationHours, std::move(callback)});
+    return nullptr;
+}
 } // namespace livehime
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
@@ -46,6 +116,9 @@ int main(int argc, char **argv) {
     QTemporaryDir directory;
     LiveController controller(directory.path());
     RoomRealtime service(&controller);
+    using Phase = RealtimeConnection::Phase;
+    check(service.connection().phase == Phase::Idle && !service.connection().attempt,
+          "signed-out rooms have no connection alarm");
     int acknowledged = 0;
     QString sendStatus;
     QObject::connect(&service, &RoomRealtime::danmakuSendFinished, [&](bool accepted, const QString &status) {
@@ -54,7 +127,41 @@ int main(int argc, char **argv) {
     });
     service.sendDanmaku("hello");
     check(sends.isEmpty(), "signed-out chat cannot write");
+    service.moderateUser(UserModeration::Block, 999, service.contextEpoch());
+    check(!service.canModerate(999) && management.isEmpty(), "signed-out management cannot write");
     signIn(controller);
+    const auto initialRoom = service.contextEpoch();
+    int managementEvents = 0;
+    bool managementAccepted = false;
+    QString managementStatus;
+    QObject::connect(&service, &RoomRealtime::moderationFinished, [&](bool ok, const QString &status) {
+        ++managementEvents;
+        managementAccepted = ok;
+        managementStatus = status;
+    });
+    service.moderateUser(UserModeration::Block, 0, initialRoom);
+    service.moderateUser(UserModeration::Mute, controller.user().uid, initialRoom);
+    service.moderateUser(UserModeration::AppointAdmin, 999, initialRoom - 1);
+    service.moderateUser(UserModeration::Mute, 999, initialRoom, {}, -1);
+    check(management.isEmpty() && !service.canModerate(controller.user().uid), "unknown, self and stale targets rejected");
+    service.moderateUser(UserModeration::Mute, 999, initialRoom, "original message", 4);
+    service.moderateUser(UserModeration::Block, 888, initialRoom);
+    check(management.size() == 1 && !service.canModerate(999) && management.first().action == UserModeration::Mute &&
+          management.first().anchor == controller.user().uid && management.first().room == serverRoom.roomId &&
+          management.first().target == 999 && management.first().message == "original message" && management.first().durationHours == 4,
+          "moderation binds anchor, room and target once");
+    management.last().complete(ApiError{ApiError::Kind::Api, QStringLiteral("权限不足"), 403});
+    check(!managementAccepted && managementStatus.contains(QStringLiteral("权限不足")) && service.canModerate(999),
+          "server permission rejection is shown and releases the pending action");
+    service.moderateUser(UserModeration::AppointAdmin, 999, initialRoom);
+    management.last().complete(Done{});
+    check(managementAccepted, "moderation acknowledges server success");
+    service.moderateUser(UserModeration::Block, 999, initialRoom);
+    ApiError unknown{ApiError::Kind::Timeout, QStringLiteral("超时")};
+    unknown.outcomeUnknown = true;
+    management.last().complete(unknown);
+    check(!managementAccepted && managementStatus.contains(QStringLiteral("未确认")) && management.size() == 3,
+          "unconfirmed moderation is not retried");
     service.sendDanmaku("   ");
     check(sends.isEmpty(), "invalid chat cannot write");
     service.sendDanmaku(QStringLiteral("主播你好"));
@@ -76,6 +183,19 @@ int main(int argc, char **argv) {
     const auto v2 = [](const char *base64) {
         return QJsonObject{{"cmd", "INTERACT_WORD_V2"}, {"data", QJsonObject{{"pb", QLatin1String(base64)}}}};
     };
+    // Google protobuf vectors for InteractWord.uinfo(22), UserInfo.uid(1), UserInfo.wealth(4), Wealth.level(1).
+    const auto wealthEntry = roomInteraction(v2("KAEwyAOyAQcI6gUiAggl"), 456);
+    const auto hiddenWealth = roomInteraction(v2("COoFKAEwyAOoAQGyAQcI6gUiAggl"), 456);
+    const auto mixedIdentity = roomInteraction(v2("CN4BKAEwyAOyAQcI6gUiAggM"), 456);
+    const auto emptyWealth = roomInteraction(v2("KAEwyAOyAQUI6gUiAA=="), 456);
+    check(wealthEntry && wealthEntry->value("wealth_level").toInteger() == 37 && wealthEntry->value("uid").toInteger() == 746 &&
+          hiddenWealth && !hiddenWealth->contains("wealth_level") && !hiddenWealth->contains("uid") &&
+          mixedIdentity && !mixedIdentity->contains("uid") && emptyWealth && !emptyWealth->contains("wealth_level"),
+          "native V2 entry wealth and nested user identity respect anonymity and ambiguous targets");
+    const auto conflictingV1 = roomInteraction(QJsonObject{{"cmd", "INTERACT_WORD"}, {"data", QJsonObject{
+        {"msg_type", 1}, {"uid", "746"}, {"uinfo", QJsonObject{{"uid", "746"}}},
+        {"sender_uinfo", QJsonObject{{"uid", 222}}}}}}, 456);
+    check(conflictingV1 && !conflictingV1->contains("uid"), "V1 conflicting sender IDs cannot identify a moderation target");
     QJsonArray delivered;
     QObject::connect(&service, &RoomRealtime::events, [&](const QJsonArray &batch) { delivered = batch; });
     auto firstEntry = legacy(1, 456, "first");
@@ -142,6 +262,9 @@ int main(int argc, char **argv) {
     check(reads.size() == initial, "same-room refresh does not reconnect");
     check(contextChanges == 0, "same-room refresh does not clear history or reset rank mode");
     check(service.entryHistory().size() == 500, "same-room refresh keeps entries");
+    const auto firstConfig = findRead("getDanmuInfo");
+    if (firstConfig >= 0)
+        checkReconnect(service, firstConfig);
     service.setVisible(1, true);
     const int oldRank = findRead("queryContributionRank");
     service.selectAudience("intimacy_rank", "intimacy_rank");
@@ -181,9 +304,24 @@ int main(int argc, char **argv) {
           QJsonObject{{"info", QJsonObject{{"now", 1}, {"num", 0}}}, {"list", QJsonValue::Null}});
     check(!service.guardHasMore() && service.guardData().value("rows").toArray().isEmpty(),
           "null list accepted as legitimate empty guard page");
+    const auto previousReads = int(reads.size());
+    service.moderateUser(UserModeration::Mute, 999, initialRoom);
+    const auto oldEvents = managementEvents;
     serverRoom.roomId = 789;
     controller.refresh();
     drain();
+    management.last().complete(Done{});
+    check(managementEvents == oldEvents && service.canModerate(999), "changing rooms invalidates in-flight moderation");
+    check(service.connection().phase == Phase::Connecting && service.connection().attempt == 0,
+          "changing rooms discards the previous recovery state");
+    const auto newConfig = findRead("getDanmuInfo", previousReads);
+    check(newConfig >= 0, "new room fetches its own danmaku configuration");
+    if (newConfig >= 0) {
+        auto callback = reads[newConfig].callback;
+        callback(ApiError{ApiError::Kind::Api, QStringLiteral("离线测试配置失败"), 101});
+        check(service.connection().phase == Phase::Reconnecting && service.connection().attempt == 1 &&
+              service.connection().retryAt.remainingTime() > 0, "configuration request errors expose a timed retry");
+    }
     transport->events({firstEntry, legacy(1, 789, "new room")});
     check(service.entryHistory().size() == 1 && service.entryHistory().first().name == "new room",
           "switching rooms clears entries and rejects late old-room arrivals");
@@ -193,6 +331,9 @@ int main(int argc, char **argv) {
     service.sendDanmaku("stale send");
     controller.logout();
     drain();
+    transport->connectionProgress(GoimClient::Progress::Waiting, QStringLiteral("已过期的重试"), QDeadlineTimer(1000));
+    check(service.connection().phase == Phase::Idle && service.connection().attempt == 0,
+          "logging out clears the alarm even after queued transport events drain");
     sends.last()(Done{});
     check(acknowledged == 1 && !service.sendingDanmaku() && !service.canSendDanmaku(),
           "late chat reply cannot affect a new account context");
@@ -207,6 +348,8 @@ int main(int argc, char **argv) {
     const int beforeStop = contextChanges;
     service.stop();
     service.stop();
+    check(service.connection().phase == Phase::Idle && !service.connection().attempt,
+          "intentional shutdown never shows a connection alarm");
     check(serviceStops == 1 && contextChanges == beforeStop, "shutdown clears alerts without reloading room views");
     {
         auto *owner = new LiveController(directory.path());

@@ -4,6 +4,7 @@
 #include <QDateTime>
 #include <QRandomGenerator>
 #include <QSet>
+#include <utility>
 
 namespace livehime {
 namespace {
@@ -24,10 +25,28 @@ RoomRealtime::RoomRealtime(LiveController *controller, QObject *parent)
             emit rankConfigChanged();
         }
     });
-    connect(goim_, &GoimClient::statusChanged, this, &RoomRealtime::setStatus);
-    connect(goim_, &GoimClient::tokenRefreshRequested, this, &RoomRealtime::fetchConfig);
+    connect(goim_, &GoimClient::connectionProgress, this,
+            [this](GoimClient::Progress phase, const QString &detail, QDeadlineTimer retryAt) {
+                if (stopped_ || !uid_ || !roomId_)
+                    return;
+                switch (phase) {
+                case GoimClient::Progress::Connecting: connecting(detail); break;
+                case GoimClient::Progress::Connected: setConnection(RealtimeConnection::Phase::Connected, detail); break;
+                case GoimClient::Progress::Waiting: retryConnection(detail, retryAt); break;
+                }
+            });
+    connect(goim_, &GoimClient::tokenRefreshRequested, this, [this] {
+        if (stopped_ || !uid_ || !roomId_)
+            return;
+        retryConnection(QStringLiteral("弹幕令牌已过期，正在更新"));
+        fetchConfig();
+    });
     connect(goim_, &GoimClient::endpointFailed, this, [this] {
+        if (stopped_ || !uid_ || !roomId_)
+            return;
         ++endpointIndex_;
+        if (endpointIndex_ < endpoints_.size())
+            retryConnection(QStringLiteral("弹幕节点连接失败，正在切换节点"));
         connectEndpoint();
     });
     connect(goim_, &GoimClient::events, this, [this](const QJsonArray &batch) {
@@ -61,6 +80,9 @@ RoomRealtime::RoomRealtime(LiveController *controller, QObject *parent)
                     const auto sequence = entryHistory_.isEmpty() ? 1 : entryHistory_.constLast().sequence + 1;
                     entryHistory_.append({data->value("uname").toString(), timestamp > 0 ? timestamp : now(),
                                           messageId, sequence});
+                    auto &entry = entryHistory_.last();
+                    entry.uid = data->value("uid").toInteger();
+                    entry.glory = data->value("wealth_level").toInteger();
                     entriesChanged = true;
                 }
                 displayEvents.append(QJsonObject{{"cmd", "INTERACT_WORD"}, {"data", *data}});
@@ -111,9 +133,17 @@ RoomRealtime::RoomRealtime(LiveController *controller, QObject *parent)
     syncContext();
 }
 RoomRealtime::~RoomRealtime() { stop(); }
-void RoomRealtime::setStatus(const QString &status) {
-    status_ = status;
-    emit statusChanged(status);
+void RoomRealtime::setConnection(RealtimeConnection::Phase phase, QString detail, int attempt, QDeadlineTimer retryAt) {
+    connection_ = {phase, attempt, retryAt, std::move(detail)};
+    emit connectionChanged(connection_);
+    emit statusChanged(connection_.detail);
+}
+void RoomRealtime::connecting(const QString &detail) {
+    setConnection(connection_.attempt ? RealtimeConnection::Phase::Reconnecting : RealtimeConnection::Phase::Connecting,
+                  detail, connection_.attempt);
+}
+void RoomRealtime::retryConnection(const QString &detail, QDeadlineTimer retryAt) {
+    setConnection(RealtimeConnection::Phase::Reconnecting, detail, connection_.attempt + 1, retryAt);
 }
 void RoomRealtime::stop() {
     if (stopped_)
@@ -125,7 +155,9 @@ void RoomRealtime::stop() {
     refreshTimer_.stop();
     retryTimer_.stop();
     sendingDanmaku_ = false;
+    moderating_ = false;
     if (controller_) {
+        controller_->client()->cancelRealtime(moderationReply_);
         controller_->client()->cancelRealtime(sendReply_);
         controller_->client()->cancelRealtime(configReply_);
         controller_->client()->cancelRealtime(audienceReply_);
@@ -134,6 +166,7 @@ void RoomRealtime::stop() {
     goim_->stop();
     entryHistory_.clear();
     entryIds_.clear();
+    setConnection(RealtimeConnection::Phase::Idle, QStringLiteral("弹幕已停止"));
     emit stopped();
 }
 void RoomRealtime::syncContext() {
@@ -153,6 +186,9 @@ void RoomRealtime::syncContext() {
     entryHistory_.clear();
     entryIds_.clear();
     sendingDanmaku_ = false;
+    moderating_ = false;
+    controller_->client()->cancelRealtime(moderationReply_);
+    moderationReply_.clear();
     controller_->client()->cancelRealtime(sendReply_);
     sendReply_.clear();
     controller_->client()->cancelRealtime(configReply_);
@@ -163,6 +199,7 @@ void RoomRealtime::syncContext() {
     guardReply_.clear();
     retryTimer_.stop();
     goim_->stop();
+    connection_ = {};
     audience_ = {};
     endpoints_ = {};
     connectionToken_.clear();
@@ -179,7 +216,7 @@ void RoomRealtime::syncContext() {
     emit audienceChanged();
     emit guardChanged();
     if (!uid_ || !roomId_) {
-        setStatus(QStringLiteral("请先登录并加载房间"));
+        setConnection(RealtimeConnection::Phase::Idle, QStringLiteral("请先登录并加载房间"));
         return;
     }
     fetchConfig();
@@ -192,15 +229,15 @@ void RoomRealtime::fetchConfig() {
     if (stopped_ || !uid_ || !roomId_ || configReply_)
         return;
     const auto epoch = contextEpoch_;
-    setStatus(QStringLiteral("正在获取弹幕连接配置…"));
+    connecting(QStringLiteral("正在获取弹幕连接配置…"));
     configReply_ = controller_->client()->fetchRealtime(
         protocol::danmuInfo(roomId_, now()), [this, epoch](Result<QJsonObject> result) {
             if (epoch != contextEpoch_ || stopped_)
                 return;
             configReply_.clear();
             if (const auto *error = std::get_if<ApiError>(&result)) {
-                setStatus(failure(*error));
                 retryTimer_.start();
+                retryConnection(failure(*error), QDeadlineTimer(retryTimer_.remainingTime(), Qt::PreciseTimer));
                 return;
             }
             const auto data = std::get<QJsonObject>(result);
@@ -225,8 +262,9 @@ void RoomRealtime::connectEndpoint() {
     if (stopped_ || !controller_ || !uid_ || !roomId_)
         return;
     if (endpointIndex_ >= endpoints_.size() || connectionToken_.isEmpty()) {
-        setStatus(QStringLiteral("弹幕地址暂不可用，稍后重新获取连接配置"));
         retryTimer_.start();
+        retryConnection(QStringLiteral("弹幕地址暂不可用，稍后重新获取连接配置"),
+                        QDeadlineTimer(retryTimer_.remainingTime(), Qt::PreciseTimer));
         return;
     }
     const auto host = endpoints_.at(endpointIndex_).toObject();
@@ -260,6 +298,34 @@ void RoomRealtime::sendDanmaku(const QString &text) {
     });
     if (reply && self && self->contextEpoch_ == epoch && self->sendingDanmaku_)
         self->sendReply_ = reply;
+}
+void RoomRealtime::moderateUser(UserModeration action, qint64 targetUid, quint64 expectedEpoch, const QString &message,
+                                int durationHours) {
+    if (moderating_) return;
+    if (!controller_ || expectedEpoch != contextEpoch_ || !canModerate(targetUid)) {
+        emit moderationFinished(false, QStringLiteral("请选择当前直播间中身份明确的其他用户。"));
+        return;
+    }
+    if (action == UserModeration::Mute && !protocol::validMuteDuration(durationHours)) {
+        emit moderationFinished(false, QStringLiteral("请选择有效的禁言时长。"));
+        return;
+    }
+    moderating_ = true;
+    const QPointer<RoomRealtime> self(this);
+    auto *reply = controller_->client()->moderateUser(action, uid_, roomId_, targetUid, message, durationHours,
+        [self, expectedEpoch](Result<Done> result) {
+            if (!self || self->stopped_ || self->contextEpoch_ != expectedEpoch) return;
+            self->moderating_ = false;
+            self->moderationReply_.clear();
+            if (const auto *error = std::get_if<ApiError>(&result)) {
+                emit self->moderationFinished(false, error->outcomeUnknown
+                    ? QStringLiteral("操作结果未确认，请先在直播间管理中核实。") : failure(*error));
+            } else {
+                emit self->moderationFinished(true, QStringLiteral("操作成功"));
+            }
+        });
+    if (reply && self && self->contextEpoch_ == expectedEpoch && self->moderating_)
+        self->moderationReply_ = reply;
 }
 void RoomRealtime::setVisible(int kind, bool visible) {
     if (kind < 0 || kind > 2)

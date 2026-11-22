@@ -285,7 +285,7 @@ jobs:
                         $recipesArchive, "$recipesArchive.sha256", 'qt-source-provenance.json', 'qt-source-provenance.json.sha256')
           if ($report.version -cne $env:RELEASE_VERSION -or $report.commit -cne $env:GITHUB_SHA -or
               !$report.ctest.passed -or !$report.dllLoad.passed -or !$report.installer.passed -or
-              $report.ctest.count -lt 15 -or $report.installer.count -lt 31 -or
+              $report.ctest.count -lt 16 -or $report.installer.count -lt 31 -or
               @($report.files).Count -ne $expected.Count) { throw 'Invalid release validation report.' }
           $actualNames = @(Get-ChildItem -LiteralPath release-assets -File | Select-Object -ExpandProperty Name)
           if (@(Compare-Object ($expected + $reportName) $actualNames).Count -ne 0) {
@@ -297,6 +297,12 @@ jobs:
             if ($records.Count -ne 1 -or $actual -cne $records[0].sha256) { throw "Asset verification failed: $name" }
           }
           @(
+            if ($env:RELEASE_VERSION -eq '0.4.3') {
+              '- 新弹幕和入场记录的高亮更醒目，约 1.8 秒淡出。修复窄浮窗中表情加载后末行被截断的问题。'
+              '- 断线时顶部显示红色提示、重连次数与等待倒计时。向上翻看弹幕后，点击底部未读计数气泡可回到最新消息。'
+              '- 昵称旁显示平台提供的荣耀等级。右击昵称或头像可访问空间、拉黑、禁言 2／4／24 小时或设置普通房管。管理操作需确认。'
+              ''
+            }
             if ($env:RELEASE_VERSION -eq '0.4.2') {
               '- 浮动面板获得焦点时，OBS 主窗口保持原来的层级。互动浮窗开启鼠标穿透后，仍可点击输入框打字、按回车或点击「发送」，其余区域的点击会落到后方应用。'
               '- 新弹幕和观众入场时，对应行以主题色高亮，约 1.2 秒后淡出。重新打开入场历史时，已有记录保持原样。'

@@ -268,6 +268,20 @@ QNetworkReply *BiliClient::sendDanmaku(qint64 roomId, const QString &text, Callb
                     else callback(Done{});
                 }, nullptr, false, true);
 }
+QNetworkReply *BiliClient::moderateUser(UserModeration action, qint64 anchorId, qint64 roomId, qint64 targetUid,
+                                       const QString &message, int durationHours, Callback<Done> callback)
+{
+    if (const auto error = sessionError()) { callback(*error); return nullptr; }
+    const auto request = protocol::moderateUser(action, anchorId, roomId, targetUid, message, csrf(), now(), durationHours);
+    if (request.url.isEmpty()) {
+        callback(inputError(QStringLiteral("请选择当前直播间内的其他用户。")));
+        return nullptr;
+    }
+    return send(request, [callback = std::move(callback)](Result<QJsonObject> result) {
+        if (const auto *error = std::get_if<ApiError>(&result)) callback(*error);
+        else callback(Done{});
+    });
+}
 QNetworkReply *BiliClient::fetchRealtime(const protocol::Request &request, Callback<QJsonObject> callback)
 {
     if (const auto error = sessionError()) { callback(*error); return nullptr; }

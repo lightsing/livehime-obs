@@ -11,17 +11,18 @@ namespace livehime {
 class DisplayAssetCache final : public QObject {
     Q_OBJECT
   public:
+    enum class Usage { Avatar, Emote };
     explicit DisplayAssetCache(QObject *parent = nullptr);
     QPixmap get(const QString &url);
     static QString emoteUrl(const QString &url);
     QPixmap cachedEmote(const QString &normalizedUrl) const;
     QPixmap emote(const QString &normalizedUrl);
+    void storePreview(const QString &url, Usage usage, const QPixmap &preview);
   signals:
-    void ready();
+    void ready(const QString &url);
     void emoteReady(const QString &normalizedUrl);
 
   private:
-    enum class Usage { Avatar, Emote };
     using Key = QPair<QString, Usage>;
     QPixmap requestPreview(const QString &url, Usage usage);
     void pump();
