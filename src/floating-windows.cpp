@@ -576,7 +576,8 @@ struct FloatingWindows::Impl {
     QComboBox *guardMaster{};
     QList<RankChoice> choices;
     int secondaryIndex = 0;
-    bool locked = false, split = false, stopped = false;
+    QPushButton *audienceLock = nullptr;
+    bool audienceLocked = false, locked = false, split = false, stopped = false;
     QWidget *settingsPane{};
     QCheckBox *showGifts{}, *showAnti{}, *showMedal{}, *showIdentity{}, *showAvatars{}, *pause{},
         *hideMoney{}, *paidOnly{};
@@ -602,6 +603,11 @@ struct FloatingWindows::Impl {
         pins[k]->setEnabled(floating);
         modes[k]->setText(floating ? QStringLiteral("停靠到 OBS") : QStringLiteral("浮动窗口"));
         modes[k]->setEnabled(docks[k]->features().testFlag(QDockWidget::DockWidgetFloatable));
+        if (k == 1 && audienceLock) {
+            const QSignalBlocker block(audienceLock);
+            audienceLock->setEnabled(floating);
+            audienceLock->setChecked(floating && audienceLocked);
+        }
         if (k == 0 && lockButton) {
             const QSignalBlocker block(lockButton);
             lockButton->setEnabled(floating);
@@ -620,7 +626,7 @@ struct FloatingWindows::Impl {
         const bool floating = dock->isFloating();
         auto flags = dock->windowFlags();
         flags.setFlag(Qt::WindowStaysOnTopHint, floating && pins[k]->isChecked());
-        flags.setFlag(Qt::WindowTransparentForInput, floating && k == 0 && locked);
+        flags.setFlag(Qt::WindowTransparentForInput, floating && ((k == 0 && locked) || (k == 1 && audienceLocked)));
         const bool visible = dock->isVisible();
         if (flags != dock->windowFlags()) {
             dock->setWindowFlags(flags);
@@ -635,7 +641,12 @@ struct FloatingWindows::Impl {
         applyingFlags = false;
         updateTools(k);
     }
-    void setLocked(bool wanted) {
+    void setLocked(bool wanted, int kind = 0) {
+        if (kind == 1) {
+            audienceLocked = wanted && docks[1] && docks[1]->isFloating();
+            applyFlags(1);
+            return;
+        }
         locked = wanted && docks[0] && docks[0]->isFloating();
         settings.setValue("interactionLocked", false);
         applyFlags(0); // Always clear native flags, even if our logical state was already false.
@@ -728,8 +739,8 @@ struct FloatingWindows::Impl {
             QObject::connect(dock, &QDockWidget::visibilityChanged, owner, [this, k](bool v) {
                 if (stopped || applyingFlags)
                     return;
-                if (k == 0)
-                    setLocked(false);
+                if (k <= 1)
+                    setLocked(false, k);
                 if (service && k != GiftDock)
                     service->setVisible(k, v);
                 if (docks[k] && docks[k]->isFloating())
@@ -740,8 +751,8 @@ struct FloatingWindows::Impl {
             QObject::connect(dock, &QDockWidget::topLevelChanged, owner, [this, k](bool floating) {
                 if (stopped || applyingFlags)
                     return;
-                if (!floating && k == 0)
-                    setLocked(false);
+                if (!floating && k <= 1)
+                    setLocked(false, k);
                 applyFlags(k);
             });
             QObject::connect(dock, &QDockWidget::featuresChanged, owner, [this, k] { updateTools(k); });
@@ -1169,6 +1180,13 @@ struct FloatingWindows::Impl {
         antiView->setVisible(showAnti->isChecked() && anti.rowCount() > 0);
     }
     void buildAudience(QVBoxLayout *l) {
+        audienceLock = new QPushButton(QStringLiteral("鼠标穿透"));
+        audienceLock->setObjectName("audience-lock");
+        audienceLock->setCheckable(true);
+        audienceLock->setToolTip(QStringLiteral("重新打开“房间观众”即可解除穿透"));
+        l->addWidget(audienceLock);
+        QObject::connect(audienceLock, &QPushButton::clicked, owner, [this](bool checked) { setLocked(checked, 1); });
+        updateTools(1);
         master = new QComboBox;
         master->setObjectName("audienceMaster");
         secondary = new QPushButton;
@@ -1466,10 +1484,14 @@ FloatingWindows::FloatingWindows(RoomRealtime *s, QString path, QWidget *p,
                                  std::array<QDockWidget *, DockCount> registeredDocks)
     : QObject(p), d(std::make_unique<Impl>(this, s, path, p, registeredDocks)) {
     d->docks[0]->installEventFilter(this);
+    d->docks[1]->installEventFilter(this);
     d->docks[GiftDock]->installEventFilter(this);
 }
 FloatingWindows::~FloatingWindows() { shutdown(); }
 bool FloatingWindows::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == d->docks[1] && event->type() == QEvent::HideToParent &&
+        d->audienceLocked && !d->stopped && !d->applyingFlags && d->docks[1]->isHidden())
+        d->setLocked(false, 1);
     if (watched == d->docks[0] && event->type() == QEvent::HideToParent &&
         d->locked && !d->stopped && !d->applyingFlags && d->docks[0]->isHidden())
         d->setLocked(false); // The OBS Docks menu blocks visibilityChanged.
@@ -1506,8 +1528,8 @@ bool FloatingWindows::interactionLocked() const {
 void FloatingWindows::showWindow(int kind) {
     if (kind < 0 || kind >= DockCount || d->stopped || !d->docks[kind])
         return;
-    if (kind == 0)
-        unlockInteraction();
+    if (kind <= 1)
+        d->setLocked(false, kind);
     if (kind == GiftDock) {
         d->setGiftSplit(true);
         if (d->panels[0])
@@ -1527,8 +1549,8 @@ void FloatingWindows::unlockInteraction() { d->setLocked(false); }
 void FloatingWindows::dockWindow(int kind) {
     if (kind < 0 || kind >= DockCount || d->stopped || !d->docks[kind])
         return;
-    if (kind == 0)
-        unlockInteraction();
+    if (kind <= 1)
+        d->setLocked(false, kind);
     d->docks[kind]->setFloating(false);
     d->applyFlags(kind);
     if (d->ownHost && d->host)
@@ -1539,8 +1561,8 @@ void FloatingWindows::dockWindow(int kind) {
 void FloatingWindows::floatWindow(int kind) {
     if (kind < 0 || kind >= DockCount || d->stopped || !d->docks[kind])
         return;
-    if (kind == 0)
-        unlockInteraction();
+    if (kind <= 1)
+        d->setLocked(false, kind);
     d->docks[kind]->setFloating(true);
     d->applyFlags(kind);
     showWindow(kind);
@@ -1549,6 +1571,7 @@ void FloatingWindows::shutdown() {
     if (d->stopped)
         return;
     unlockInteraction();
+    d->setLocked(false, 1);
     d->stopped = true;
     d->renderTimer.stop();
     d->giftVisibilityTimer.stop();

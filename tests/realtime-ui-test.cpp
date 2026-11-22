@@ -235,7 +235,22 @@ static void checkDockFocus(RoomRealtime &service) {
         }
         if (kind == 0)
             checkFloatingEditor(dock, dock->findChild<QLineEdit *>("danmakuInput"));
+        if (kind == 1) {
+            auto *lock = dock->findChild<QPushButton *>("audience-lock");
+            check(lock && lock->isEnabled(), "floating audience panel offers click-through");
+            if (lock) {
+                lock->click();
+                check(lock->isChecked() && dock->windowFlags().testFlag(Qt::WindowTransparentForInput) &&
+                      !windows.interactionLocked(), "audience click-through is independent of chat");
+                windows.showWindow(1);
+                check(!lock->isChecked() && !dock->windowFlags().testFlag(Qt::WindowTransparentForInput),
+                      "reopening audience restores mouse input");
+                lock->click();
+            }
+        }
         windows.dockWindow(kind);
+        if (kind == 1)
+            check(!dock->windowFlags().testFlag(Qt::WindowTransparentForInput), "redocking audience clears click-through");
         check(dock->window() == &host && host.windowFlags() == hostFlags,
               "redocking keeps the original main window and its flags");
     }
@@ -246,6 +261,38 @@ static void checkDockFocus(RoomRealtime &service) {
     check(host.isMinimized() && shells[0]->isVisible() && !shells[0]->isMinimized(),
           "opening an independent panel keeps the OBS host minimized");
     checkIndependentFloat(shells[0], host);
+#ifdef Q_OS_WIN
+    if (QApplication::platformName() == "windows") {
+        auto *floating = shells[0];
+        auto freeDrag = [&](QEvent::Type type) {
+            const QPoint p(-100, -100); // Probe the drag policy without clicking a control.
+            QMouseEvent press(type, QPointF(p), QPointF(floating->mapToGlobal(p)), Qt::LeftButton,
+                              Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(floating, &press);
+            return press.modifiers().testFlag(Qt::ControlModifier);
+        };
+        for (auto type : {QEvent::MouseButtonPress, QEvent::NonClientAreaMouseButtonPress})
+            check(freeDrag(type), "minimized OBS forces a free floating drag");
+        host.showNormal();
+        QWidget otherApp;
+        otherApp.setGeometry(host.frameGeometry());
+        otherApp.show();
+        otherApp.raise();
+        otherApp.activateWindow();
+        settle();
+        check(freeDrag(QEvent::NonClientAreaMouseButtonPress), "another window covering OBS prevents docking");
+        floating->raise();
+        floating->activateWindow();
+        settle();
+        check(freeDrag(QEvent::NonClientAreaMouseButtonPress), "activating a float above another app keeps docking disabled");
+        otherApp.hide();
+        host.raise();
+        host.activateWindow();
+        settle();
+        if (GetForegroundWindow() == reinterpret_cast<HWND>(host.winId()))
+            check(!freeDrag(QEvent::NonClientAreaMouseButtonPress), "foreground OBS retains ordinary drag docking");
+    }
+#endif
     host.showNormal();
     windows.shutdown();
 }

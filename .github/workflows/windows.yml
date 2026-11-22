@@ -297,6 +297,11 @@ jobs:
             if ($records.Count -ne 1 -or $actual -cne $records[0].sha256) { throw "Asset verification failed: $name" }
           }
           @(
+            if ($env:RELEASE_VERSION -eq '0.4.4') {
+              '- OBS 主窗口在后台时，拖动插件浮窗不会再隔着其他应用吸附到 OBS。切回 OBS 后仍可拖动停靠。'
+              '- 房间观众浮窗可单独开启鼠标穿透。从主面板或工具菜单重新打开房间观众即可解除穿透。'
+              ''
+            }
             if ($env:RELEASE_VERSION -eq '0.4.3') {
               '- 新弹幕和入场记录的高亮更醒目，约 1.8 秒淡出。修复窄浮窗中表情加载后末行被截断的问题。'
               '- 断线时顶部显示红色提示、重连次数与等待倒计时。向上翻看弹幕后，点击底部未读计数气泡可回到最新消息。'

@@ -4,6 +4,12 @@
 
 ---
 
+## 0.4.4 · 后台拖动与房间观众穿透
+
+Windows 原生浮窗回归覆盖 OBS 最小化、其他窗口遮挡、观众穿透与重新打开后的解锁。发布构建和安装器结果见 [CI 验证报告](https://github.com/lightsing/livehime-obs/releases/download/v0.4.4/livehime-obs-0.4.4-windows-x64-validation.json)。
+
+---
+
 ## 0.4.3 · 直播互动面板（2026-11-22）
 
 Windows 原生浮窗回归覆盖末条表情、高亮、重连提示、未读气泡、荣耀等级和观众右键菜单。管理请求使用模拟数据验证，未对真实账号执行。发布构建和安装器结果见 [CI 验证报告](https://github.com/lightsing/livehime-obs/releases/download/v0.4.3/livehime-obs-0.4.3-windows-x64-validation.json)。
