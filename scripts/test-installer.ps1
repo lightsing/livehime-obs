@@ -594,6 +594,7 @@ try {
         Copy-Item -LiteralPath $newerQt -Destination (Get-FixturePath $mainHost.root 'bin/64bit/Qt6Core.dll') -Force
         $mainHost.sentinels['bin/64bit/obs64.exe'] = Get-Sha256 $minorHost
         $mainHost.sentinels['bin/64bit/Qt6Core.dll'] = Get-Sha256 $newerQt
+        $main.hostSnapshot = Get-TreeSnapshot $mainHost.root
         Assert-True ((Invoke-Package $main 'after-host-update') -eq 0) 'The registered installation rejected the updated OBS host.'
         $null = Assert-Installed $main
     }
