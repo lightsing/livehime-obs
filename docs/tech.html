@@ -25,7 +25,7 @@
       </nav>
       <div class="nav-actions">
         <a class="btn btn-ghost" href="https://github.com/lightsing/livehime-obs" target="_blank" rel="noopener">GitHub</a>
-        <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/tag/v0.4.5" target="_blank" rel="noopener">v0.4.5 发布页</a>
+        <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/tag/v0.4.6" target="_blank" rel="noopener">v0.4.6 发布页</a>
         <button class="nav-toggle" id="navToggle" type="button" aria-label="展开导航">菜单</button>
       </div>
     </div>
@@ -96,7 +96,7 @@
             <ul>
               <li><strong>现代独立目录（默认）</strong>：<code>C:\ProgramData\obs-studio\plugins\livehime-obs</code>（根部 DLL、<code>data/</code> 资源、<code>installer/</code> 卸载器）。</li>
               <li><strong>兼容旧根目录布局</strong>：支持继续识别并原位升级早期 0.2 <code>obs-plugins\64bit</code> 布局，保留原安装范围与同一份卸载日志。</li>
-              <li>安装器先核验 OBS 安装目录内的 <code>obs64.exe</code>（33.0.1 x64 / Qt 6.11.1）并检测目标目录进程占用。</li>
+              <li>安装器支持 64 位 OBS Studio 33 及以上版本，检查 OBS 安装目录和进程占用。OBS 自带的 Qt 6 运行库可随 OBS 更新。</li>
               <li>卸载仅清除已登记载荷，保留 OBS 场景、配置、其他插件与用户登录缓存；安装包未做 Authenticode 签名，旁附 <code>.sha256</code> 与 <code>.json</code>。</li>
             </ul>
           </div>
@@ -180,7 +180,7 @@ Set-Location livehime-obs
               </div>
               <pre id="techTestSnippet">.\scripts\build.ps1 -DependenciesRoot D:\path\to\deps -SkipBootstrap
 ctest --test-dir build -C RelWithDebInfo --output-on-failure
-.\scripts\test-installer.ps1 -InstallerPath dist\livehime-obs-0.4.5-windows-x64-setup.exe</pre>
+.\scripts\test-installer.ps1 -InstallerPath dist\livehime-obs-0.4.6-windows-x64-setup.exe</pre>
             </div>
           </div>
         </div>

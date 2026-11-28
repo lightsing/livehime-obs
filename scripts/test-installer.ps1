@@ -452,17 +452,19 @@ try {
             } finally { $sha.Dispose(); $buffer.Dispose(); $inputStream.Dispose() }
         }
     } finally { $archive.Dispose() }
-    $validHost = Build-FixtureBinary 'host-valid' '33.0.1.0' 'x64'
+    $validHost = Build-FixtureBinary 'host-minimum' '33.0.0.0' 'x64'
+    $patchHost = Build-FixtureBinary 'host-patch' '33.0.3.0' 'x64'
+    $minorHost = Build-FixtureBinary 'host-newer-minor' '33.1.0.0' 'x64'
+    $newerHost = Build-FixtureBinary 'host-newer-major' '34.0.0.0' 'x64'
     $wrongHost = Build-FixtureBinary 'host-wrong-version' '32.0.0.0' 'x64'
     $x86Host = Build-FixtureBinary 'host-x86' '33.0.1.0' 'x86'
     $validQt = Build-FixtureBinary 'qt-valid' '6.11.1.0' 'x64' -Library
-    $wrongQt = Build-FixtureBinary 'qt-wrong-version' '6.10.0.0' 'x64' -Library
+    $newerQt = Build-FixtureBinary 'qt-newer' '6.12.2.0' 'x64' -Library
     $missing = New-BundleFixture 'invalid-missing-obs' (New-ObsFixture 'missing-obs' $validHost $validQt -MissingObs)
     $wrong = New-BundleFixture 'invalid-obs-version' (New-ObsFixture 'wrong-obs' $wrongHost $validQt)
     $x86 = New-BundleFixture 'invalid-x86' (New-ObsFixture 'x86' $x86Host $validQt)
-    $badQt = New-BundleFixture 'invalid-qt-version' (New-ObsFixture 'wrong-qt' $validHost $wrongQt)
     $missingQt = New-BundleFixture 'invalid-missing-qt' (New-ObsFixture 'missing-qt' $validHost $validQt -MissingQt)
-    $mainHost = New-ObsFixture '中文 空格 OBS fixture' $validHost $validQt
+    $mainHost = New-ObsFixture '中文 空格 OBS fixture' $patchHost $validQt
     $main = New-BundleFixture '中文 空格 bundle fixture' $mainHost
     $otherHost = New-ObsFixture 'unrelated-running-obs' $validHost $validQt
     $redirect = New-BundleFixture 'different-upgrade-destination' $mainHost
@@ -471,7 +473,6 @@ try {
     Invoke-Case 'reject missing OBS' { Assert-RejectedInstall $missing 'missing-obs' }
     Invoke-Case 'reject unsupported OBS version' { Assert-RejectedInstall $wrong 'wrong-obs-version' }
     Invoke-Case 'reject x86 executable' { Assert-RejectedInstall $x86 'wrong-architecture' }
-    Invoke-Case 'reject unsupported Qt version' { Assert-RejectedInstall $badQt 'wrong-qt-version' }
     Invoke-Case 'reject missing Qt runtime' { Assert-RejectedInstall $missingQt 'missing-qt' }
 
     foreach ($protectedRoot in @(
@@ -582,12 +583,20 @@ try {
     Stop-OwnedObs $mainProcess
 
     $otherProcess = Start-OwnedObs $otherHost
-    Invoke-Case 'install to Chinese/space path while unrelated OBS runs' {
+    Invoke-Case 'install on OBS 33.0.3 in a Chinese/space path while unrelated OBS runs' {
         Assert-True ((Invoke-Package $main 'first-install') -eq 0) 'First installation failed.'
         $null = Assert-Installed $main
         Assert-OwnedObsAlive $otherProcess
     }
     Stop-OwnedObs $otherProcess
+    Invoke-Case 'keep the registered bundle after OBS and its Qt runtime update in place' {
+        Copy-Item -LiteralPath $minorHost -Destination (Get-FixturePath $mainHost.root 'bin/64bit/obs64.exe') -Force
+        Copy-Item -LiteralPath $newerQt -Destination (Get-FixturePath $mainHost.root 'bin/64bit/Qt6Core.dll') -Force
+        $mainHost.sentinels['bin/64bit/obs64.exe'] = Get-Sha256 $minorHost
+        $mainHost.sentinels['bin/64bit/Qt6Core.dll'] = Get-Sha256 $newerQt
+        Assert-True ((Invoke-Package $main 'after-host-update') -eq 0) 'The registered installation rejected the updated OBS host.'
+        $null = Assert-Installed $main
+    }
     Invoke-Case 'same-version reinstall repairs plugin payload' {
         [IO.File]::WriteAllText((Get-FixturePath $main.root $runtimePaths[0]), 'SYNTHETIC OLD PLUGIN CONTENT')
         Assert-True ((Invoke-Package $main 'same-version-reinstall') -eq 0) 'Same-version reinstallation failed.'
@@ -628,8 +637,8 @@ try {
         Assert-Uninstalled $main $ownedFiles
     }
 
-    $modern = New-BundleFixture 'manual-modern-bundle' (New-ObsFixture 'manual-modern-host' $validHost $validQt)
-    Invoke-Case 'repair an unregistered modern bundle without changing user files' {
+    $modern = New-BundleFixture 'manual-modern-bundle' (New-ObsFixture 'manual-modern-host' $newerHost $newerQt)
+    Invoke-Case 'repair an unregistered modern bundle on a newer OBS major and Qt minor' {
         foreach ($relative in $runtimePaths) {
             $path = Get-FixturePath $modern.root $relative
             New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($path)) | Out-Null

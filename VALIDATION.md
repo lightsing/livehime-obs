@@ -4,6 +4,12 @@
 
 ---
 
+## 0.4.6 · 放宽 OBS 安装版本限制
+
+在 Windows x64 上用本机 OBS Studio 33.0.3 的独立便携副本验证安装和插件加载，使用模拟消息检查互动面板。安装器回归还覆盖 OBS 33.0.0、33.0.3、已登记的 OBS 原位更新，以及后续 OBS 主版本搭配不同 Qt 6 次版本的模拟安装目录。[发布验证报告](https://github.com/lightsing/livehime-obs/releases/download/v0.4.6/livehime-obs-0.4.6-windows-x64-validation.json)
+
+---
+
 ## 0.4.5 · 礼物弹幕合并、可调分栏与主题配色
 
 在 Windows x64 的 OBS Studio 33.0.1 中，使用模拟互动消息验证了礼物与弹幕混排、进场卡片和紧凑在线榜。载入含独立礼物栏的旧布局后，菜单只保留现有面板。拖动分隔线后重启 OBS，两栏高度恢复到拖动后的位置。

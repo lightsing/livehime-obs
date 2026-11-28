@@ -2,7 +2,7 @@
 
 一个在 OBS 里直接开播 B 站的插件。装好之后，你可以在 OBS 的「B站直播」面板里扫码登录、改标题、选分区、裁切上传封面，然后直接用 OBS 原生的「开始直播 / 停止直播」按钮开播下播——不需要再挂着哔哩哔哩直播姬，也不用额外跑本地转发程序。
 
-> **支持环境**：Windows x64 + **OBS Studio 33.0.1**
+> **安装要求**：Windows x64，**OBS Studio 33 或更高版本**。
 
 ---
 
@@ -10,7 +10,7 @@
 
 ### 推荐方式：直接用安装包
 
-下载并运行 [0.4.5 Windows x64 安装包](https://github.com/lightsing/livehime-obs/releases/download/v0.4.5/livehime-obs-0.4.5-windows-x64-setup.exe)。
+下载并运行 [0.4.6 Windows x64 安装包](https://github.com/lightsing/livehime-obs/releases/download/v0.4.6/livehime-obs-0.4.6-windows-x64-setup.exe)。
 
 1. **安装前先退出所有 OBS 窗口**，避免插件文件被占用。
 2. **老版本直接覆盖升级**：如果你之前装过 `0.1` 或 `0.2` 版本的安装包，直接运行新版安装器就行，不用先卸载，原本的安装目录和登录状态都会保留。
@@ -23,7 +23,7 @@
 > **安装补充说明**
 > - 安装包目前没有购买微软代码签名，如果 Windows 弹出保护提示，点「更多信息 → 仍要运行」即可。
 > - 卸载只会删除插件本身的文件，不会动你的 OBS 场景、配置和账号缓存。
-> - 通过 ZIP 安装且仍在使用 0.4.0 之前版本的用户，请先退出 OBS，再用 [0.4.5 便携 ZIP](https://github.com/lightsing/livehime-obs/releases/download/v0.4.5/livehime-obs-0.4.5-windows-x64.zip) 覆盖原目录。之后可在插件内自动更新。
+> - 通过 ZIP 安装且仍在使用 0.4.0 之前版本的用户，请先退出 OBS，再用 [0.4.6 便携 ZIP](https://github.com/lightsing/livehime-obs/releases/download/v0.4.6/livehime-obs-0.4.6-windows-x64.zip) 覆盖原目录。之后可在插件内自动更新。
 
 ### 自动更新
 

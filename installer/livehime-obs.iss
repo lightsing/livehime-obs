@@ -68,20 +68,20 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [CustomMessages]
 chinesesimp.SelectObs=选择 OBS Studio
 english.SelectObs=Select OBS Studio
-chinesesimp.SelectObsDescription=请选择已安装的 OBS Studio 33.0.1 目录。
-english.SelectObsDescription=Select the existing OBS Studio 33.0.1 directory.
-chinesesimp.SelectObsDetails=目录应包含 bin\64bit\obs64.exe。安装器在此核验 OBS 33.0.1 x64 和 Qt 6.11.1。升级会沿用原插件位置；新安装再选择独立插件目录。
-english.SelectObsDetails=The directory must contain bin\64bit\obs64.exe. Setup checks OBS 33.0.1 x64 and Qt 6.11.1 here. Upgrades keep their existing plugin location; a new installation selects its bundle directory next.
+chinesesimp.SelectObsDescription=请选择 OBS Studio 33 或更高版本的安装目录。
+english.SelectObsDescription=Select the installation directory for OBS Studio 33 or later.
+chinesesimp.SelectObsDetails=选择包含 bin\64bit\obs64.exe 的目录。升级会沿用原插件位置。
+english.SelectObsDetails=Choose the directory containing bin\64bit\obs64.exe. Upgrades keep the existing plugin location.
 chinesesimp.SelectBundle=选择插件目录（通常保留默认位置）
 english.SelectBundle=Select the plugin bundle directory (normally keep the default)
 chinesesimp.SelectBundleDetails=标准位置为 ProgramData\obs-studio\plugins\livehime-obs，所有用户共享。最后一级必须为 livehime-obs。便携版可使用其 OBS 目录下的 plugins\livehime-obs。
 english.SelectBundleDetails=The standard shared location is ProgramData\obs-studio\plugins\livehime-obs. The final folder must be named livehime-obs. A portable OBS can use plugins\livehime-obs inside its OBS directory.
 chinesesimp.MissingObs=未找到 OBS：%1。请在 OBS 目录页选择含 bin\64bit\obs64.exe 的安装目录。
 english.MissingObs=OBS was not found at %1. On the OBS directory page, select the installation containing bin\64bit\obs64.exe.
-chinesesimp.WrongObs=所选 OBS 必须是 OBS Studio 33.0.1 x64。请使用匹配版本的 OBS。
-english.WrongObs=The selected OBS must be OBS Studio 33.0.1 x64. Install a matching OBS version first.
-chinesesimp.WrongQt=所选 OBS 的 Qt 运行库不匹配。此安装包需要 Qt 6.11.1。
-english.WrongQt=The selected OBS Qt runtime is incompatible. This installer requires Qt 6.11.1.
+chinesesimp.WrongObs=请选择 64 位 OBS Studio 33 或更高版本的安装目录。
+english.WrongObs=Select a 64-bit OBS Studio installation, version 33 or later.
+chinesesimp.MissingQt=所选 OBS 目录缺少 bin\64bit\Qt6Core.dll。请选择完整的 OBS 安装目录。
+english.MissingQt=The selected directory is missing bin\64bit\Qt6Core.dll. Select a complete OBS installation.
 chinesesimp.WrongBundleName=插件目录的最后一级必须为 livehime-obs；请勿选择 OBS 安装根目录。
 english.WrongBundleName=The plugin bundle folder must be named livehime-obs. Do not select the OBS installation root.
 chinesesimp.AdminDirectory=此共享或受保护目录需要管理员安装：%1。请取消安装，正常重新运行安装器并允许管理员权限；不要使用 /CURRENTUSER 参数。
@@ -363,16 +363,13 @@ begin
     Result := CustomMessage('WrongObs');
     Exit;
   end;
-  if (VersionMS <> (33 shl 16)) or ((VersionLS shr 16) <> 1) then begin
+  { The plugin uses the OBS 33.0 module API. libobs ignores the patch version. }
+  if (VersionMS shr 16) < 33 then begin
     Result := CustomMessage('WrongObs');
     Exit;
   end;
-  if not GetVersionNumbers(AddBackslash(Root) + 'bin\64bit\Qt6Core.dll', VersionMS, VersionLS) then begin
-    Result := CustomMessage('WrongQt');
-    Exit;
-  end;
-  if (VersionMS <> ((6 shl 16) + 11)) or ((VersionLS shr 16) <> 1) then
-    Result := CustomMessage('WrongQt');
+  if not FileExists(AddBackslash(Root) + 'bin\64bit\Qt6Core.dll') then
+    Result := CustomMessage('MissingQt');
 end;
 
 function RunningHostError(const ObsRoot, BundleRoot: String; ForceShared: Boolean): String;

@@ -297,6 +297,10 @@ jobs:
             if ($records.Count -ne 1 -or $actual -cne $records[0].sha256) { throw "Asset verification failed: $name" }
           }
           @(
+            if ($env:RELEASE_VERSION -eq '0.4.6') {
+              '- 修复安装器拒绝 OBS Studio 33.0.3 的问题。64 位 OBS Studio 33 及更高版本可安装，OBS 和 Qt 的补丁更新也可继续原位升级插件。'
+              ''
+            }
             if ($env:RELEASE_VERSION -eq '0.4.5') {
               '- 礼物和弹幕按到达顺序显示在直播互动上栏。每条礼物显示「投喂」、礼物名和图片，旧布局中的独立礼物栏已移除。'
               '- 拖动弹幕与进场消息之间的分隔线即可调整高度，重启后会恢复。进场消息展示昵称、粉丝牌和直播间提供的尾标。'
@@ -324,7 +328,7 @@ jobs:
               '礼物流水现在可以单独停靠。在「直播互动」点「拆分礼物」，或从 OBS「停靠窗口 / Docks」打开「礼物流水」。点击「合回直播互动」可以将已有记录放回互动面板。'
               ''
             }
-            "Windows x64 plugin for OBS Studio $($report.obsVersion) / Qt $($report.qtVersion).",
+            "Requires OBS Studio 33 or later on Windows x64. Built with OBS Studio $($report.obsVersion) and Qt $($report.qtVersion).",
             '',
             'Close all OBS instances and run the setup EXE with administrator approval. It installs the shared plugin under ProgramData/obs-studio/plugins/livehime-obs. The ZIP keeps the legacy layout for portable OBS.',
             '',
