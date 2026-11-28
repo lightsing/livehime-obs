@@ -105,7 +105,7 @@ RoomDock::RoomDock(const QString &storageDirectory, QWidget *parent)
 RoomDock::RoomDock(LiveController *controller, QWidget *parent)
     : QWidget(parent), controller_(controller), nativeControls_(new NativeStreamControls(this)) {
     setMinimumWidth(300);
-    auto *layout = contentLayout_ = addScrollableDockContent(new QVBoxLayout(this));
+    auto *layout = addScrollableDockContent(new QVBoxLayout(this));
     auto *content = layout->parentWidget();
     account_ = new QLabel(QStringLiteral("未登录"), content);
     account_->setTextFormat(Qt::PlainText);
@@ -239,10 +239,6 @@ RoomDock::RoomDock(LiveController *controller, QWidget *parent)
     updateTitle();
     showCover();
     updateView();
-}
-
-void RoomDock::addUpdateControls(QWidget *controls) {
-    contentLayout_->insertWidget(contentLayout_->count() - 1, controls);
 }
 
 void RoomDock::setRealtimeAvailable(bool available) {

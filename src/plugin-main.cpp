@@ -10,17 +10,18 @@
 #include "update-controller.hpp"
 #include <QAction>
 #include <QCoreApplication>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QDockWidget>
 #include <QFileInfo>
 #include <QLabel>
 #include <QMainWindow>
 #include <QPointer>
-#include <QPushButton>
 #include <QSettings>
 #include <QMenu>
 #include <QStandardPaths>
 #include <QVBoxLayout>
+#include <QWindow>
 #include <algorithm>
 #include <obs-module.h>
 #include <util/bmem.h>
@@ -44,6 +45,7 @@ QPointer<livehime::LiveController> controller;
 QPointer<livehime::RoomRealtime> realtime;
 QPointer<FloatingWindows> windows;
 QPointer<livehime::UpdateController> updates;
+QPointer<QDialog> updateSettings;
 QPointer<livehime::ErrorReports> errors;
 QPointer<QAction> pkAction;
 QPointer<livehime::ClassicPkWindow> pkWindow;
@@ -51,6 +53,24 @@ std::array<QPointer<QDockWidget>, FloatingWindows::DockCount> realtimeDocks;
 bool waitingForFrontend = false;
 bool frontendValid = true;
 void createRoomDock();
+void addToolsDialog(QDialog *dialog) {
+    const auto label = (dialog->windowTitle() + QStringLiteral("…")).toUtf8();
+    auto *action = static_cast<QAction *>(obs_frontend_add_tools_menu_qaction(label.constData()));
+    if (!action)
+        return;
+    action->setParent(dialog);
+    QObject::connect(action, &QAction::triggered, dialog, [dialog] {
+        if (dialog->isMinimized())
+            dialog->showNormal();
+        else
+            dialog->show();
+        // A previous error may have been shown above a modal login dialog.
+        if (auto *handle = dialog->windowHandle())
+            handle->setTransientParent(dialog->parentWidget()->window()->windowHandle());
+        dialog->raise();
+        dialog->activateWindow();
+    });
+}
 void openClassicPk(QWidget *window) {
     using namespace livehime;
     if (!controller || !realtime || !realtime->classicPkUnlocked()) return;
@@ -101,10 +121,9 @@ void frontendReady(obs_frontend_event event, void *) {
         waitingForFrontend = false; // Frontend APIs are invalid after this event.
         removeClassicPk();
         delete errors.data();
-        if (updates) {
+        if (updates)
             updates->onObsExit();
-            delete updates.data();
-        }
+        delete updateSettings.data();
         if (windows)
             windows->shutdown();
         removeRealtimeDocks();
@@ -204,6 +223,7 @@ void createRoomDock() {
     if (!window)
         return;
     errors = new livehime::ErrorReports(QString::fromUtf8(obs_get_version_string()), window);
+    addToolsDialog(errors);
     if (!dockContainer) {
         errors->report(PluginIssue::local(QStringLiteral("插件初始化"), QStringLiteral("无法注册 B站直播面板，请检查是否安装了多份插件。")));
         return;
@@ -225,6 +245,28 @@ void createRoomDock() {
         return;
     }
     livehime::diagnostics::start(storage);
+    char *helperPath = obs_module_file("livehime-update-helper.exe");
+    const auto cacheBase = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (helperPath && QFileInfo::exists(QString::fromUtf8(helperPath)) && !cacheBase.isEmpty()) {
+        updateSettings = new QDialog(window);
+        updateSettings->setWindowTitle(QStringLiteral("B站直播 · 插件更新设置"));
+        updateSettings->setWindowFlag(Qt::WindowContextHelpButtonHint, false);
+        updateSettings->setAttribute(Qt::WA_QuitOnClose, false);
+        updates = new livehime::UpdateController(storage, QDir(cacheBase).filePath("livehime-obs/updates"),
+                                                 QFileInfo(QString::fromUtf8(helperPath)).absoluteFilePath(), updateSettings);
+        QObject::connect(updates, &livehime::UpdateController::updateFailed, errors, [](const QString &detail) {
+            errors->report(PluginIssue::local(QStringLiteral("更新插件"), detail));
+        });
+        auto *layout = new QVBoxLayout(updateSettings);
+        layout->addWidget(updates->createControls(updateSettings));
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, updateSettings);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, updateSettings, &QDialog::reject);
+        layout->addWidget(buttons);
+        addToolsDialog(updateSettings);
+    } else {
+        errors->report(PluginIssue::local(QStringLiteral("更新插件"), QStringLiteral("无法初始化更新组件，请检查插件安装和缓存目录。")));
+    }
+    bfree(helperPath);
     controller = new livehime::LiveController(storage, dockContainer);
     realtime = new livehime::RoomRealtime(controller, dockContainer);
     QObject::connect(controller, &livehime::LiveController::problem, errors, &livehime::ErrorReports::report);
@@ -287,23 +329,6 @@ void createRoomDock() {
     }
     delete loadingLabel.data();
     dockContainer->layout()->addWidget(dock);
-    char *helperPath = obs_module_file("livehime-update-helper.exe");
-    const auto cacheBase = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
-    if (helperPath && QFileInfo::exists(QString::fromUtf8(helperPath)) && !cacheBase.isEmpty()) {
-        updates = new livehime::UpdateController(storage, QDir(cacheBase).filePath("livehime-obs/updates"),
-                                                 QFileInfo(QString::fromUtf8(helperPath)).absoluteFilePath());
-        QObject::connect(updates, &livehime::UpdateController::updateFailed, errors, [](const QString &detail) {
-            errors->report(PluginIssue::local(QStringLiteral("更新插件"), detail));
-        });
-        dock->addUpdateControls(updates->createControls(dock));
-    } else {
-        errors->report(PluginIssue::local(QStringLiteral("更新插件"), QStringLiteral("无法初始化更新组件，请检查插件安装和缓存目录。")));
-    }
-    bfree(helperPath);
-    auto *exportButton = new QPushButton(QStringLiteral("导出诊断包…"), dock);
-    QObject::connect(exportButton, &QPushButton::clicked, errors, &livehime::ErrorReports::chooseDestination);
-    dock->addUpdateControls(exportButton);
-    dock->addUpdateControls(errors->createIssueButton(dock));
     controller->initialize();
     blog(LOG_INFO,
          "[livehime-obs] Loaded version " LIVEHIME_OBS_VERSION
@@ -315,7 +340,7 @@ void createRoomDock() {
 void obs_module_unload(void) {
     removeClassicPk();
     delete errors.data();
-    delete updates.data();
+    delete updateSettings.data();
     if (frontendValid) {
         obs_frontend_remove_event_callback(frontendReady, nullptr);
         waitingForFrontend = false;
