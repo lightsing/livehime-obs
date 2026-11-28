@@ -1,4 +1,7 @@
 #include "bili-client.hpp"
+#include "beta-diagnostics.hpp"
+#include <QElapsedTimer>
+#include <QSet>
 
 #include <QBuffer>
 #include <QDateTime>
@@ -193,6 +196,26 @@ QNetworkReply *BiliClient::send(const protocol::Request &draft, Callback<QJsonOb
     request.setTransferTimeout(multipart ? 60000 : 30000);
     auto *reply = draft.method == "GET" ? manager_->get(request) :
                   multipart ? manager_->post(request, multipart) : manager_->post(request, draft.body);
+#if LIVEHIME_BETA_BUILD
+    static const QSet<QString> operations{"nav", "startLive", "stopLive", "GetInfo", "PreLive", "getDanmuInfo",
+        "sendmsg", "UpdatePreLiveInfo", "AddBlack", "AddSilentUser", "appoint", "queryContributionRank", "topListNew"};
+    auto operation = draft.url.fileName();
+    if (!operations.contains(operation)) operation = QStringLiteral("other");
+    QElapsedTimer timer;
+    timer.start();
+    callback = [done = std::move(callback), operation, timer, reply](Result<QJsonObject> result) {
+        QJsonObject fields{{"operation", operation}, {"elapsed_ms", timer.elapsed()},
+                           {"http", reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt()},
+                           {"network_error", int(reply->error())}};
+        if (const auto *error = std::get_if<ApiError>(&result)) {
+            fields.insert("error_kind", int(error->kind));
+            fields.insert("api_code", error->code);
+            fields.insert("outcome_unknown", error->outcomeUnknown);
+        }
+        diagnostics::record("api.complete", fields);
+        done(std::move(result));
+    };
+#endif
     if (multipart) multipart->setParent(reply);
     pending_.insert(reply);
     const auto generation = generation_;

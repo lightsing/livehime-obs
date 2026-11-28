@@ -1,4 +1,6 @@
 #include "live-controller.hpp"
+#include "beta-diagnostics.hpp"
+#include <QMetaEnum>
 #include <QTimer>
 #include <chrono>
 
@@ -47,7 +49,17 @@ LiveController::LiveController(QString storageDirectory, QObject *parent)
 LiveController::~LiveController() = default;
 
 void LiveController::setState(State state, const QString &message)
-{ state_ = state; status_ = message; emit changed(); }
+{
+#if LIVEHIME_BETA_BUILD
+    if (state_ != state) {
+        const auto states = QMetaEnum::fromType<State>();
+        diagnostics::record("live.state", {{"from", states.valueToKey(int(state_))}, {"to", states.valueToKey(int(state))}});
+    }
+#endif
+    state_ = state;
+    status_ = message;
+    emit changed();
+}
 
 void LiveController::persistCookies()
 {

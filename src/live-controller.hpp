@@ -12,6 +12,7 @@ class LiveController final : public QObject {
     Q_OBJECT
 public:
     enum class State { SignedOut, Ready, Preparing, Connecting, Live, Reconnecting, Recoverable, Uncertain, Stopping };
+    Q_ENUM(State)
     explicit LiveController(QString storageDirectory, QObject *parent = nullptr);
     ~LiveController() override;
     void initialize();

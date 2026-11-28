@@ -1,4 +1,7 @@
 #include "goim-client.hpp"
+#include "beta-diagnostics.hpp"
+#include <QFile>
+#include <QTemporaryDir>
 #include "goim-codec.hpp"
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -50,6 +53,9 @@ static QByteArray compressed(const QByteArray &input, int version) {
 }
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
+    QTemporaryDir config;
+    check(config.isValid(), "temporary config");
+    diagnostics::start(config.path());
     QString error;
     QVector<GoimPacket> packets;
     GoimCodec codec;
@@ -204,6 +210,17 @@ int main(int argc, char **argv) {
           "endpoint failover preserves queue UUID");
     client.stop();
     delete peer;
+    QFile diagnosticsFile(config.filePath("diagnostics/beta-0.jsonl"));
+#if LIVEHIME_BETA_BUILD
+    check(diagnosticsFile.open(QIODevice::ReadOnly), "beta diagnostic log");
+    const auto records = diagnosticsFile.readAll();
+    check(records.contains("danmaku.connection") && records.contains("danmaku.disconnect") &&
+          records.contains("Connected") && records.contains("Waiting"), "connection and retry recorded");
+    for (const auto secret : {"synthetic-token", "refreshed-token", "synthetic-buvid", "127.0.0.1", "after auth"})
+        check(!records.contains(secret), "no token, device, host or message in diagnostics");
+#else
+    check(!diagnosticsFile.exists(), "stable connection does not create diagnostic logs");
+#endif
     std::puts("Goim protocol and local-server checks passed");
     return 0;
 }

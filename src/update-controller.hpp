@@ -19,6 +19,6 @@ class UpdateController final : public QObject {
     PluginUpdater updater_;
     QSettings settings_;
     QString cacheDir_, helper_;
-    bool automatic_, downloadAttempted_ = false, installAtExit_, exiting_ = false;
+    bool automatic_, betaUpdates_, downloadAttempted_ = false, installAtExit_, exiting_ = false;
 };
 }

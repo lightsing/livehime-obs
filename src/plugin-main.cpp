@@ -1,3 +1,4 @@
+#include "beta-diagnostics.hpp"
 #include "dock-focus.hpp"
 #include "floating-windows.hpp"
 #include "moderation-alerts.hpp"
@@ -26,6 +27,7 @@ MODULE_EXPORT const char *obs_module_description(void) {
     return "Bilibili room management and direct OBS streaming for Windows";
 }
 MODULE_EXPORT const char *obs_module_name(void) { return "Livehime OBS"; }
+MODULE_EXPORT const char *livehime_obs_version(void) { return LIVEHIME_OBS_VERSION; }
 MODULE_EXPORT const char *obs_module_author(void) { return "Livehime OBS contributors"; }
 
 namespace {
@@ -170,6 +172,7 @@ void createRoomDock() {
             loadingLabel->setText(QStringLiteral("无法创建插件配置目录。"));
         return;
     }
+    livehime::diagnostics::start(storage);
     controller = new livehime::LiveController(storage, dockContainer);
     realtime = new livehime::RoomRealtime(controller, dockContainer);
     new livehime::ModerationAlerts(realtime, window);

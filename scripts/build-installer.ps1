@@ -15,13 +15,15 @@ $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $versionMatch = [regex]::Match((Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'CMakeLists.txt')),
     'project\(livehime-obs\s+VERSION\s+(\d+\.\d+\.\d+)\s')
 if (!$versionMatch.Success) { throw 'Cannot read the project version from CMakeLists.txt.' }
-$version = $versionMatch.Groups[1].Value
-if (!$PackagePath) { $PackagePath = Join-Path $projectRoot "dist\livehime-obs-$version-windows-x64.zip" }
+$baseVersion = $versionMatch.Groups[1].Value
+if (!$PackagePath) { $PackagePath = Join-Path $projectRoot "dist\livehime-obs-$baseVersion-windows-x64.zip" }
 $PackagePath = [IO.Path]::GetFullPath($PackagePath)
 if (!(Test-Path -LiteralPath $PackagePath -PathType Leaf)) { throw "Build the plugin ZIP first: $PackagePath" }
-if ([IO.Path]::GetFileName($PackagePath) -ne "livehime-obs-$version-windows-x64.zip") {
+$artifactPattern = '\Alivehime-obs-(?<version>' + [regex]::Escape($baseVersion) + '(?:-beta\.(?:0|[1-9][0-9]*))?)-windows-x64\.zip\z'
+if ([IO.Path]::GetFileName($PackagePath) -cnotmatch $artifactPattern) {
     throw 'The ZIP filename must match the current project version.'
 }
+$version = $Matches.version
 $compiler = & (Join-Path $PSScriptRoot 'bootstrap-installer.ps1') -ToolsRoot $ToolsRoot -Offline:$Offline
 $buildRoot = Join-Path $projectRoot 'build'
 $stage = Join-Path $buildRoot ('installer-stage-' + [guid]::NewGuid().ToString('N'))
@@ -59,6 +61,11 @@ try {
         $verified[$record.path] = $true
     }
     if ($verified.Count -ne $entries.Count - 1) { throw 'ZIP contains files not covered by its hash manifest.' }
+    $versionEntry = 'data/obs-plugins/livehime-obs/release-version.txt'
+    if (!$verified.ContainsKey($versionEntry)) { throw 'Missing configured version in ZIP.' }
+    $reader = [IO.StreamReader]::new($entries[$versionEntry].Open())
+    try { if ($reader.ReadToEnd().Trim() -cne $version) { throw 'ZIP version differs from its filename.' } }
+    finally { $reader.Dispose() }
     foreach ($relative in $runtimeFiles) {
         if (!$verified.ContainsKey($relative)) { throw "Missing verified runtime file: $relative" }
         $destination = Join-Path $stage $relative
@@ -102,7 +109,7 @@ try {
     })
     [ordered]@{schema=2; layout='obs-modern-bundle'; version=$version; obsVersion='33.0.1'; qtVersion='6.11.1'; files=$modernFiles} |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $stage 'manifest-modern.json') -Encoding utf8
-    $compilerArgs = @("/DPayloadRoot=$stage", "/DOutputRoot=$OutputDirectory", "/DAppVersion=$version")
+    $compilerArgs = @("/DPayloadRoot=$stage", "/DOutputRoot=$OutputDirectory", "/DAppVersion=$version", "/DNumericVersion=$baseVersion.0")
     if ($FixtureIdentity) { $compilerArgs += '/DFixtureIdentity=1' }
     $compilerArgs += (Join-Path $projectRoot 'installer\livehime-obs.iss')
     & $compiler @compilerArgs

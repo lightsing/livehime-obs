@@ -8,9 +8,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$versionMatch = [regex]::Match((Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'CMakeLists.txt')), 'project\(livehime-obs\s+VERSION\s+(\d+\.\d+\.\d+)\s')
-if (!$versionMatch.Success) { throw 'Cannot read the project version.' }
-$version = $versionMatch.Groups[1].Value
+$version = (Get-Content -Raw -LiteralPath (Join-Path $BuildDirectory "$Configuration/release-version.txt")).Trim()
+if ($version -cnotmatch '\A\d+\.\d+\.\d+(?:-beta\.(?:0|[1-9][0-9]*))?\z') { throw 'Invalid configured release version.' }
 $BuildDirectory = [IO.Path]::GetFullPath($BuildDirectory)
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 if (!(Test-Path -LiteralPath (Join-Path $BuildDirectory "$Configuration\livehime-obs.dll"))) {

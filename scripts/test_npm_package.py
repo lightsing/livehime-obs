@@ -34,6 +34,14 @@ class NpmPackageTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             verify(self.version, self.exe, self.archive)
 
+    def test_beta_package(self):
+        pack("1.2.3-beta.10", self.exe, self.archive)
+        verify("1.2.3-beta.10", self.exe, self.archive)
+        with self.assertRaises(ValueError):
+            verify("1.2.3", self.exe, self.archive)
+        with self.assertRaises(ValueError):
+            pack("1.2.3-beta.01", self.exe, self.archive)
+
     def registry_record(self):
         archive = self.archive.read_bytes()
         digest = "sha512-" + base64.b64encode(hashlib.sha512(archive).digest()).decode()

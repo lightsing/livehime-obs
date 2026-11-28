@@ -1,4 +1,6 @@
 #include "plugin-updater.hpp"
+#include "beta-diagnostics.hpp"
+#include <QMetaEnum>
 #include "npm-signature.hpp"
 #include <QDir>
 #include <QFile>
@@ -27,18 +29,36 @@ PluginUpdater::PluginUpdater(QString currentVersion, QString cacheDirectory, QOb
     : QObject(parent), currentVersion_(std::move(currentVersion)), cacheDirectory_(std::move(cacheDirectory)) {
     update::cleanInstalledCaches(currentVersion_, cacheDirectory_);
 }
-PluginUpdater::~PluginUpdater() {
+PluginUpdater::~PluginUpdater() { cancelPending(); }
+void PluginUpdater::cancelPending() {
     if (reply_) {
         disconnect(reply_, nullptr, this, nullptr);
         reply_->abort();
+        reply_->deleteLater();
+        reply_.clear();
     }
     if (worker_) {
         disconnect(worker_, nullptr, this, nullptr);
         worker_->wait();
         delete worker_;
+        worker_ = nullptr;
     }
 }
+void PluginUpdater::setChannel(update::Channel channel) {
+    if (channel_ == channel) return;
+    channel_ = channel;
+    ++generation_;
+    cancelPending();
+    release_.reset();
+    installer_ = {};
+    urls_.clear();
+    setState(State::Idle, {});
+}
 void PluginUpdater::setState(State state, const QString &status) {
+#if LIVEHIME_BETA_BUILD
+    diagnostics::record("update.state", {{"state", QMetaEnum::fromType<State>().valueToKey(int(state))},
+                                         {"channel", channel_ == update::Channel::Beta ? "beta" : "stable"}});
+#endif
     state_ = state;
     status_ = status;
     emit changed();
@@ -119,26 +139,26 @@ void PluginUpdater::check() {
     release_.reset();
     installer_ = {};
     urls_.clear();
-    if (!update::stableVersion(currentVersion_)) {
+    if (!update::validVersion(currentVersion_)) {
         setState(State::Error, QStringLiteral("当前版本号不支持更新检查"));
         return;
     }
     setState(State::Checking, QStringLiteral("正在检查更新…"));
     request(metadataUrl(true), MaxMetadata, false, 0, [this](QByteArray body, const QString &error) {
-        const auto mirror = error.isEmpty() ? update::readMetadata(body) : std::nullopt;
+        const auto mirror = error.isEmpty() ? update::readMetadata(body, channel_) : std::nullopt;
         bool signedMirror = false;
         if (mirror) {
             const auto versions = QJsonDocument::fromJson(body).object().value("versions").toObject();
             const auto dist = versions.value(mirror->version).toObject().value("dist").toObject();
             signedMirror = trustedMirrorSignature(QLatin1String(update::PackageName), mirror->version, dist);
         }
-        if (signedMirror && update::newer(mirror->version, currentVersion_)) {
+        if (channel_ == update::Channel::Stable && signedMirror && update::newer(mirror->version, currentVersion_)) {
             selectRelease(mirror, true, {});
             return;
         }
         request(metadataUrl(false), MaxMetadata, true, 0,
                 [this, mirror, signedMirror](QByteArray originBody, const QString &originError) {
-            const auto official = originError.isEmpty() ? update::readMetadata(originBody) : std::nullopt;
+            const auto official = originError.isEmpty() ? update::readMetadata(originBody, channel_) : std::nullopt;
             selectRelease(mirror, signedMirror, official);
         });
     });
@@ -151,7 +171,12 @@ void PluginUpdater::selectRelease(const std::optional<update::Release> &mirror, 
         setState(State::Error, QStringLiteral("无法取得可信的更新信息，请重试"));
         return;
     }
-    if (!update::newer(release_->version, currentVersion_)) {
+    const bool returnToStable = channel_ == update::Channel::Stable && !update::stableVersion(currentVersion_);
+    if (returnToStable && !official && update::newer(currentVersion_, release_->version)) {
+        setState(State::Error, QStringLiteral("切回较低版本需向官方源确认正式版，请稍后重试"));
+        return;
+    }
+    if (!returnToStable && !update::newer(release_->version, currentVersion_)) {
         setState(State::UpToDate, official ? QStringLiteral("已是最新版本") :
                                            QStringLiteral("镜像暂无更新，官方源暂不可用"));
         return;
@@ -175,7 +200,8 @@ void PluginUpdater::selectRelease(const std::optional<update::Release> &mirror, 
         verify({}, -1);
         return;
     }
-    setState(State::Available, QStringLiteral("发现新版本 %1").arg(release_->version));
+    const auto message = returnToStable ? QStringLiteral("可切回正式版 %1") : QStringLiteral("发现新版本 %1");
+    setState(State::Available, message.arg(release_->version));
 }
 void PluginUpdater::download() {
     if (state_ != State::Available || !release_)
@@ -212,7 +238,8 @@ void PluginUpdater::verify(QByteArray archive, int index) {
         }
         *result = update::cacheInstaller(archive, release, directory, !cached);
     });
-    connect(worker_, &QThread::finished, this, [this, index, result] {
+    connect(worker_, &QThread::finished, this, [this, index, result, generation = generation_] {
+        if (generation != generation_) return;
         worker_->wait();
         delete worker_;
         worker_ = nullptr;

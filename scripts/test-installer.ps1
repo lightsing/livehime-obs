@@ -30,11 +30,8 @@ if (!$IsWindows -or ![Environment]::Is64BitProcess) {
 }
 $InstallerPath = [IO.Path]::GetFullPath($InstallerPath)
 if (!$PackagePath) {
-    $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-    $versionMatch = [regex]::Match((Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'CMakeLists.txt')),
-        'project\(livehime-obs\s+VERSION\s+(\d+\.\d+\.\d+)\s')
-    if (!$versionMatch.Success) { throw 'Cannot read the project version from CMakeLists.txt.' }
-    $PackagePath = Join-Path $projectRoot "dist\livehime-obs-$($versionMatch.Groups[1].Value)-windows-x64.zip"
+    if ($InstallerPath -cnotmatch '-setup(?:-fixture)?\.exe\z') { throw 'Supply -PackagePath for a renamed installer.' }
+    $PackagePath = $InstallerPath -creplace '-setup(?:-fixture)?\.exe\z', '.zip'
 }
 $PackagePath = [IO.Path]::GetFullPath($PackagePath)
 $Workspace = [IO.Path]::GetFullPath($Workspace)

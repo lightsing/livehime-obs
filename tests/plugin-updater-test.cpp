@@ -202,6 +202,40 @@ int main(int argc, char **argv) {
     invalidArchive(gzip(QByteArray(update::MaxArchiveBytes + 256 * 1024, '\0')));
     expect(QDir(dir.path()).entryList(QDir::Files).isEmpty(), "failed verification writes nothing");
 
+    const auto registry = [&](const QString &stable, const QString &beta) {
+        auto root = QJsonDocument::fromJson(metadata(stable, digest, origin)).object();
+        auto versions = root["versions"].toObject();
+        versions.insert(beta, QJsonDocument::fromJson(metadata(beta, digest, origin)).object()["versions"].toObject().value(beta));
+        root.insert("versions", versions);
+        root.insert("dist-tags", QJsonObject{{"latest", stable}, {"beta", beta}});
+        return QJsonDocument(root).toJson();
+    };
+    const auto channels = registry("1.10.0", "1.11.0-beta.10");
+    using update::Channel;
+    expect(update::newer("1.11.0-beta.10","1.11.0-beta.2") && update::newer("1.11.0","1.11.0-beta.10"), "beta precedence");
+    for (const auto invalid : {"1.11.0-beta.01", "1.11.0-beta.", "1.11.0-rc.1", "1.11.0-beta.10\n"})
+        expect(!update::validVersion(invalid), "reject invalid prerelease");
+    expect(update::readMetadata(channels)->version == "1.10.0", "stable ignores beta");
+    expect(update::readMetadata(registry("1.11.0", "1.11.0-beta.10"), Channel::Beta)->version == "1.11.0" &&
+           update::readMetadata(official, Channel::Beta)->version == "1.10.0", "promotion and absent beta tag");
+    expect(!update::readMetadata(metadata("1.11.0-beta.10", digest, origin)), "stable rejects mislabelled latest");
+    OfflineUpdater subscriber("1.11.0-beta.2", dir.path());
+    subscriber.setChannel(Channel::Beta);
+    subscriber.queued = {Response{channels}, Response{channels}};
+    subscriber.check(); subscriber.wait(State::Available);
+    expect(subscriber.version() == "1.11.0-beta.10", "beta update selected");
+    subscriber.queued = {Response{archive}};
+    subscriber.download();
+    subscriber.setChannel(Channel::Stable);
+    subscriber.queued = {Response{channels}, Response{channels}};
+    subscriber.check(); subscriber.wait(State::Available);
+    expect(subscriber.version() == "1.10.0" && subscriber.installerPath().isEmpty(), "opt out during download offers lower stable");
+    subscriber.queued = {Response{channels}};
+    subscriber.check();
+    subscriber.setChannel(Channel::Beta);
+    QCoreApplication::processEvents();
+    expect(subscriber.state() == State::Idle && subscriber.version().isEmpty(), "switch cancels pending check");
+
     OfflineUpdater updater("1.9.0",dir.path());
     updater.queued = {Response{metadata("1.9.0",digest,mirror)}, Response{official}};
     updater.check(); updater.check(); updater.wait(State::Available);
@@ -250,5 +284,7 @@ int main(int argc, char **argv) {
     expect(untrusted.installerPath().isEmpty(),"failed download remains retryable without installer");
     untrusted.queued = {Response{archive}};
     untrusted.download(); untrusted.wait(State::Ready);
+    untrusted.setChannel(Channel::Beta);
+    expect(untrusted.installerPath().isEmpty() && untrusted.state() == State::Idle, "channel switch discards ready installer");
     std::puts("Offline npm resolution, verification, fallback and cache checks passed");
 }

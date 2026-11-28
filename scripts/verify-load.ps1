@@ -10,9 +10,6 @@ if (![Environment]::Is64BitProcess) { throw 'Use 64-bit PowerShell.' }
 $PluginPath = [IO.Path]::GetFullPath($PluginPath)
 $obsBin = [IO.Path]::GetFullPath((Join-Path $ObsRoot 'bin\64bit'))
 if (!(Test-Path -LiteralPath $PluginPath)) { throw "Missing plugin: $PluginPath" }
-$projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$versionMatch = [regex]::Match((Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'CMakeLists.txt')), 'project\(livehime-obs\s+VERSION\s+(\d+\.\d+\.\d+)\s')
-if (!$versionMatch.Success) { throw 'Cannot read plugin version.' }
 # Optional import inspection complements the actual Windows loader check below.
 $dumpbin = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
 $dumpbinPath = if ($dumpbin) { $dumpbin.Source } else {
@@ -45,6 +42,8 @@ public static class LivehimeLoaderProbe {
   public static extern bool FreeLibrary(IntPtr module);
   [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
   public delegate uint VersionFunction();
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+  public delegate IntPtr PluginVersionFunction();
 }
 '@
 $cookie = [LivehimeLoaderProbe]::AddDllDirectory($obsBin)
@@ -62,8 +61,12 @@ try {
     $getVersion = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($address, [LivehimeLoaderProbe+VersionFunction])
     $version = $getVersion.Invoke()
     if ($version -ne 0x21000001) { throw ('Expected OBS API 33.0.1; plugin reports 0x{0:x8}' -f $version) }
+    $address = [LivehimeLoaderProbe]::GetProcAddress($module, 'livehime_obs_version')
+    if ($address -eq [IntPtr]::Zero) { throw 'Missing plugin version export.' }
+    $getPluginVersion = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($address, [LivehimeLoaderProbe+PluginVersionFunction])
+    $pluginVersion = [Runtime.InteropServices.Marshal]::PtrToStringAnsi($getPluginVersion.Invoke())
     [pscustomobject]@{
-        plugin = $PluginPath; pluginVersion = $versionMatch.Groups[1].Value; obsBin = $obsBin; loaded = $true
+        plugin = $PluginPath; pluginVersion = $pluginVersion; obsBin = $obsBin; loaded = $true
         staticCodecImportsChecked = $codecImportsChecked
         moduleApi = '33.0.1'; scope = 'DLL import resolution and module exports; no OBS module initialization'
     } | ConvertTo-Json

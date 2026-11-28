@@ -27,7 +27,11 @@ AppPublisher=lightsing
 AppPublisherURL=https://github.com/lightsing
 AppSupportURL=https://github.com/lightsing/livehime-obs/issues
 AppUpdatesURL=https://github.com/lightsing/livehime-obs/releases
-VersionInfoVersion={#AppVersion}.0
+#ifndef NumericVersion
+  #define NumericVersion AppVersion + ".0"
+#endif
+VersionInfoVersion={#NumericVersion}
+VersionInfoProductTextVersion={#AppVersion}
 VersionInfoDescription=Livehime OBS - Bilibili streaming plugin installer
 DefaultDirName={code:DefaultInstallDirectory}
 AppendDefaultDirName=no

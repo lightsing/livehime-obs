@@ -2,7 +2,9 @@
 #include <QCheckBox>
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDesktopServices>
 #include <QDir>
+#include <QSignalBlocker>
 #include <QFile>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -55,7 +57,11 @@ QString registeredSharedHost(const QDir &data) {
 UpdateController::UpdateController(const QString &configDir, const QString &cacheDir, const QString &helper, QObject *parent)
     : QObject(parent), updater_(QStringLiteral(LIVEHIME_OBS_VERSION), cacheDir, this),
       settings_(QDir(configDir).filePath("updates.ini"), QSettings::IniFormat),
-      cacheDir_(cacheDir), helper_(helper), automatic_(settings_.value("automatic", true).toBool()), installAtExit_(automatic_) {
+      cacheDir_(cacheDir), helper_(helper), automatic_(settings_.value("automatic", true).toBool()),
+      betaUpdates_(settings_.value("channel", QStringLiteral(LIVEHIME_OBS_VERSION).contains("-beta.") ? "beta" : "stable") == "beta"),
+      installAtExit_(automatic_) {
+    if (betaUpdates_ && !settings_.contains("channel")) settings_.setValue("channel", "beta");
+    updater_.setChannel(betaUpdates_ ? update::Channel::Beta : update::Channel::Stable);
     connect(&updater_, &PluginUpdater::changed, this, &UpdateController::onUpdateChanged);
     auto backgroundCheck = [this] {
         if (!automatic_ || exiting_) return;
@@ -99,11 +105,27 @@ QWidget *UpdateController::createControls(QWidget *parent) {
     row->addStretch();
     row->addWidget(action);
     layout->addLayout(row);
+    auto *beta = new QCheckBox(QStringLiteral("加入测试版更新"), panel);
+    beta->setObjectName("betaUpdates");
+    beta->setToolTip(QStringLiteral("测试版会在本地记录诊断日志。取消后可切回最新正式版。"));
+    layout->addWidget(beta);
+#if LIVEHIME_BETA_BUILD
+    auto *openLog = new QPushButton(QStringLiteral("打开诊断目录"), panel);
+    openLog->setObjectName("openDiagnostics");
+    layout->addWidget(openLog);
+    connect(openLog, &QPushButton::clicked, this, [this] {
+        const QDir config(QFileInfo(settings_.fileName()).absolutePath());
+        QDesktopServices::openUrl(QUrl::fromLocalFile(config.filePath("diagnostics")));
+    });
+#endif
     auto *status = new QLabel(panel);
     status->setWordWrap(true);
     status->setTextFormat(Qt::PlainText);
     layout->addWidget(status);
-    const auto render = [this, action, status] {
+    const auto render = [this, automatic, beta, action, status] {
+        const QSignalBlocker blockAuto(automatic), blockBeta(beta);
+        automatic->setChecked(automatic_);
+        beta->setChecked(betaUpdates_);
         auto state = updater_.state();
         action->setEnabled(state != State::Checking && state != State::Downloading);
         action->setText(state == State::Available ? QStringLiteral("下载更新") :
@@ -114,7 +136,7 @@ QWidget *UpdateController::createControls(QWidget *parent) {
                                                   : updater_.status();
         const auto version = state == State::Ready ? updater_.version() : QString{};
         const auto prefix = version.isEmpty() ? QStringLiteral("当前 v") + QStringLiteral(LIVEHIME_OBS_VERSION)
-                                              : QStringLiteral("新版 v") + version;
+                                              : QStringLiteral("待安装 v") + version;
         status->setText(detail.isEmpty() ? prefix : prefix + QStringLiteral(" · ") + detail);
     };
     connect(this, &UpdateController::changed, panel, render);
@@ -124,6 +146,14 @@ QWidget *UpdateController::createControls(QWidget *parent) {
         if (enabled && updater_.state() != State::Ready && updater_.state() != State::Downloading && updater_.state() != State::Checking)
             check();
         emit changed();
+    });
+    connect(beta, &QCheckBox::toggled, this, [this](bool enabled) {
+        betaUpdates_ = enabled;
+        settings_.setValue("channel", enabled ? "beta" : "stable");
+        settings_.sync();
+        installAtExit_ = automatic_;
+        updater_.setChannel(enabled ? update::Channel::Beta : update::Channel::Stable);
+        check();
     });
     connect(action, &QPushButton::clicked, this, [this] {
         switch (updater_.state()) {

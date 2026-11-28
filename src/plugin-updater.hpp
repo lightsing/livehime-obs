@@ -15,6 +15,7 @@ class PluginUpdater : public QObject {
     PluginUpdater(QString currentVersion, QString cacheDirectory, QObject *parent = nullptr);
     ~PluginUpdater() override;
     void check();
+    void setChannel(update::Channel channel);
     void download();
     State state() const { return state_; }
     QString status() const { return status_; }
@@ -32,6 +33,7 @@ class PluginUpdater : public QObject {
     void request(const QUrl &url, qsizetype limit, bool officialMetadata, int redirects, Received received);
     void selectRelease(const std::optional<update::Release> &mirror, bool signedMirror,
                        const std::optional<update::Release> &official);
+    void cancelPending();
     void tryDownload(int index);
     void verify(QByteArray archive, int index);
     void downloadFailed(int index, const QString &error);
@@ -46,5 +48,7 @@ class PluginUpdater : public QObject {
     update::CachedInstaller installer_;
     State state_ = State::Idle;
     QString status_;
+    update::Channel channel_ = update::Channel::Stable;
+    quint64 generation_ = 0;
 };
 } // namespace livehime

@@ -19,7 +19,7 @@ INSTALLER = "livehime-obs-setup.exe"
 
 
 def metadata(version):
-    if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}", version):
+    if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}(?:-beta\.(?:0|[1-9][0-9]*))?", version):
         raise ValueError("Invalid release version")
     return {
         "name": NAME,

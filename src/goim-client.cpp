@@ -1,4 +1,6 @@
 #include "goim-client.hpp"
+#include "beta-diagnostics.hpp"
+#include <QMetaEnum>
 #include "gift-v2.hpp"
 #include "goim-codec.hpp"
 #include "protocol.hpp"
@@ -77,6 +79,10 @@ class GoimWorker final : public QObject {
   private:
     void report(GoimClient::Progress phase, const QString &detail, QDeadlineTimer retryAt = QDeadlineTimer::Forever) {
         emit statusChanged(generation_, detail);
+#if LIVEHIME_BETA_BUILD
+        diagnostics::record("danmaku.connection", {{"phase", QMetaEnum::fromType<GoimClient::Progress>().valueToKey(int(phase))},
+                                                   {"failures", consecutiveFailures_}});
+#endif
         emit connectionProgress(generation_, phase, detail, retryAt);
     }
     void send(quint32 op, const QByteArray &body = {}) {
@@ -93,6 +99,9 @@ class GoimWorker final : public QObject {
     void failed() {
         if (stopped_ || !socket_)
             return;
+#if LIVEHIME_BETA_BUILD
+        diagnostics::record("danmaku.disconnect", {{"socket_error", int(socket_->error())}, {"authenticated", authenticated_}});
+#endif
         authenticated_ = false;
         heartbeat_->stop();
         deadline_->stop();

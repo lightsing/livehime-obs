@@ -82,6 +82,12 @@ void PluginUpdater::check() {
         }
     });
 }
+void PluginUpdater::setChannel(update::Channel channel) {
+    if (channel == channel_) return;
+    channel_ = channel;
+    release_.reset();
+    setState(State::Idle, {});
+}
 void PluginUpdater::download() {
     if (++downloads > 12) qFatal("Unbounded automatic retry");
     require(state_ == State::Available, "download requires an available release");
@@ -157,6 +163,20 @@ int main(int argc, char **argv) {
         manual.onObsExit();
         manual.onObsExit();
         require(helperAttempts == 1, "selected install is handed off only once on exit");
+    }
+    {
+        const bool betaBuild = QStringLiteral(LIVEHIME_OBS_VERSION).contains("-beta.");
+        UpdateController controller(manualSettings, cache, helper);
+        Controls ui(controller), second(controller);
+        auto *toggle = ui.panel->findChild<QCheckBox *>("betaUpdates");
+        require(toggle && toggle->isChecked() == betaBuild, "initial channel matches installed build");
+        require(bool(ui.panel->findChild<QPushButton *>("openDiagnostics")) == betaBuild, "diagnostic folder follows installed build");
+        toggle->click();
+        require(waitFor([&] { return ui.action->isEnabled(); }) && downloads == 3, "channel change respects manual downloads");
+        require(second.panel->findChild<QCheckBox *>("betaUpdates")->isChecked() == !betaBuild, "channel reflected in both views");
+        UpdateController restarted(manualSettings, cache, helper);
+        Controls restored(restarted);
+        require(restored.panel->findChild<QCheckBox *>("betaUpdates")->isChecked() == !betaBuild, "explicit channel survives restart");
     }
     qInstallMessageHandler(previousHandler);
     return failures ? 1 : 0;

@@ -42,10 +42,15 @@ jobs:
             'project\(livehime-obs\s+VERSION\s+(\d+\.\d+\.\d+)\s')
           if (!$match.Success) { throw 'Cannot read the project version.' }
           $version = $match.Groups[1].Value
-          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF_TYPE -eq 'tag' -and
-              $env:GITHUB_REF_NAME -cne "v$version") {
-            throw "Tag '$env:GITHUB_REF_NAME' must exactly match CMake version 'v$version'."
+          $betaNumber = ''
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $tagPattern = '\Av' + [regex]::Escape($version) + '(?:-beta\.(?<beta>0|[1-9][0-9]*))?\z'
+            $tag = [regex]::Match($env:GITHUB_REF_NAME, $tagPattern)
+            if (!$tag.Success) { throw "Release tag must match v$version or v$version-beta.N." }
+            $betaNumber = $tag.Groups['beta'].Value
+            $version = $env:GITHUB_REF_NAME.Substring(1)
           }
+          "BUILD_BETA_NUMBER=$betaNumber" | Add-Content -LiteralPath $env:GITHUB_ENV
           "version=$version" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
           "PACKAGE_PREFIX=livehime-obs-$version-windows-x64" | Add-Content -LiteralPath $env:GITHUB_ENV
           "PROJECT_VERSION=$version" | Add-Content -LiteralPath $env:GITHUB_ENV
@@ -79,7 +84,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Start-Transcript -Path logs/ci/build-and-test.log -Force | Out-Null
           try {
-            & ./scripts/build.ps1 -DependenciesRoot .deps -ObsRoot $env:OBS_ROOT -Jobs 2
+            & ./scripts/build.ps1 -DependenciesRoot .deps -ObsRoot $env:OBS_ROOT -Jobs 2 -BetaNumber ([string]$env:BUILD_BETA_NUMBER)
             $inventory = & ctest --test-dir build -C RelWithDebInfo --show-only=json-v1
             if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate CTest coverage.' }
             $inventory | Set-Content -LiteralPath logs/ci/ctest-tests.json -Encoding utf8
@@ -87,7 +92,7 @@ jobs:
             foreach ($required in @('protocol-vectors', 'session-store-roundtrip', 'controller-state-transitions',
                                      'obs-bridge-lifecycle', 'ui-crop-smoke', 'native-stream-controls',
                                      'realtime-floating-windows', 'danmaku-emotes',
-                                     'npm-registry-signature', 'npm-plugin-updater', 'update-preferences', 'update-after-obs-exit')) {
+                                     'npm-registry-signature', 'npm-plugin-updater', 'update-preferences', 'release-diagnostics', 'update-after-obs-exit')) {
               if ($required -notin $testNames) { throw "Required CTest test is missing: $required" }
             }
           } finally { Stop-Transcript | Out-Null }
@@ -98,7 +103,7 @@ jobs:
           & ./scripts/verify-load.ps1 -ObsRoot $env:OBS_ROOT |
             Set-Content -LiteralPath logs/ci/load-verification.json -Encoding utf8
           $result = Get-Content -Raw -LiteralPath logs/ci/load-verification.json | ConvertFrom-Json
-          if (!$result.loaded) { throw 'DLL load verification did not succeed.' }
+          if (!$result.loaded -or $result.pluginVersion -cne $env:PROJECT_VERSION) { throw 'DLL load or version check failed.' }
 
       - name: Package ZIP and build installer
         run: |
@@ -271,7 +276,7 @@ jobs:
       - name: Verify asset hashes and source commit
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+$' -or
+          if ($env:RELEASE_VERSION -cnotmatch '\A\d+\.\d+\.\d+(?:-beta\.(?:0|[1-9][0-9]*))?\z' -or
               $env:GITHUB_REF_NAME -cne "v$env:RELEASE_VERSION") { throw 'Release tag/version mismatch.' }
           $prefix = "livehime-obs-$env:RELEASE_VERSION-windows-x64"
           $reportName = "$prefix-validation.json"
@@ -285,7 +290,7 @@ jobs:
                         $recipesArchive, "$recipesArchive.sha256", 'qt-source-provenance.json', 'qt-source-provenance.json.sha256')
           if ($report.version -cne $env:RELEASE_VERSION -or $report.commit -cne $env:GITHUB_SHA -or
               !$report.ctest.passed -or !$report.dllLoad.passed -or !$report.installer.passed -or
-              $report.ctest.count -lt 16 -or $report.installer.count -lt 31 -or
+              $report.ctest.count -lt 17 -or $report.installer.count -lt 31 -or
               @($report.files).Count -ne $expected.Count) { throw 'Invalid release validation report.' }
           $actualNames = @(Get-ChildItem -LiteralPath release-assets -File | Select-Object -ExpandProperty Name)
           if (@(Compare-Object ($expected + $reportName) $actualNames).Count -ne 0) {
@@ -358,6 +363,9 @@ jobs:
           $reportName = "$prefix-validation.json"
           $root = 'release-assets'
           $report = Get-Content -Raw -LiteralPath "$root/$reportName" | ConvertFrom-Json
+          $betaRelease = $env:RELEASE_VERSION.Contains('-beta.')
+          $releaseFlags = @()
+          if ($betaRelease) { $releaseFlags = @('--prerelease', '--latest=false') }
           function Get-TagRelease {
             $releaseApi = & gh release view $tag --repo $repository --json apiUrl --jq .apiUrl
             if ($LASTEXITCODE -ne 0) { throw 'Could not locate the tagged release.' }
@@ -371,10 +379,11 @@ jobs:
           & gh release view $tag --repo $repository --json tagName 2>$null | Out-Null
           if ($LASTEXITCODE -ne 0) {
             & gh release create $tag --repo $repository --verify-tag --draft `
-              --title "Livehime OBS $env:RELEASE_VERSION" --notes-file release-notes.md
+              --title "Livehime OBS $env:RELEASE_VERSION" --notes-file release-notes.md @releaseFlags
             if ($LASTEXITCODE -ne 0) { throw 'Could not create the release draft.' }
           }
           $remote = Get-TagRelease
+          if ($remote.prerelease -ne $betaRelease) { throw 'Existing release belongs to the wrong channel.' }
           $reportHash = Get-Sha256 "$root/$reportName"
           if ($reportName -cin $remote.assets.name) {
             & gh release download $tag --repo $repository --dir original --pattern $reportName
@@ -433,7 +442,7 @@ jobs:
           }
           if (@($remote.assets).Count -ne $report.files.Count + 1) { throw 'Release file set is incomplete.' }
           if ($remote.draft) {
-            & gh release edit $tag --repo $repository --draft=false
+            & gh release edit $tag --repo $repository --draft=false @releaseFlags
             if ($LASTEXITCODE -ne 0) { throw 'Could not publish the verified release draft.' }
           } else {
             Write-Host 'Reusing the published assets for this commit, including the original npm tarball.'
@@ -498,7 +507,8 @@ jobs:
           }
           $publishExit = $null
           if ($state -eq 'absent') {
-            & npm publish "./canonical/$tarball" --access public --ignore-scripts --provenance --registry=https://registry.npmjs.org
+            $distTag = if ($version.Contains('-beta.')) { 'beta' } else { 'latest' }
+            & npm publish "./canonical/$tarball" --tag $distTag --access public --ignore-scripts --provenance --registry=https://registry.npmjs.org
             $publishExit = $LASTEXITCODE
           } else {
             Write-Host 'npm already has the matching version metadata. Waiting for its tarball.'

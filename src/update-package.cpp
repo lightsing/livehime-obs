@@ -16,13 +16,17 @@ namespace {
 constexpr qsizetype Block = 512, MaxManifest = 64 * 1024;
 constexpr qsizetype MaxExpanded = MaxArchiveBytes + MaxManifest + 64 * 1024;
 
-std::optional<std::array<quint64, 3>> parts(const QString &version) {
-    static const QRegularExpression pattern(QStringLiteral(R"(\A(0|[1-9][0-9]{0,15})\.(0|[1-9][0-9]{0,15})\.(0|[1-9][0-9]{0,15})\z)"));
+std::optional<std::array<quint64, 4>> parts(const QString &version) {
+    static const QRegularExpression pattern(QStringLiteral(R"(\A(0|[1-9][0-9]{0,15})\.(0|[1-9][0-9]{0,15})\.(0|[1-9][0-9]{0,15})(?:-beta\.(0|[1-9][0-9]{0,15}))?\z)"));
     const auto match = pattern.match(version);
     if (!match.hasMatch())
         return {};
-    std::array<quint64, 3> values{};
+    std::array<quint64, 4> values{};
     for (size_t i = 0; i < values.size(); ++i) {
+        if (i == 3 && !match.hasCaptured(4)) {
+            values[i] = std::numeric_limits<quint64>::max(); // Stable follows every beta of the same core version.
+            break;
+        }
         values[i] = match.captured(static_cast<int>(i + 1)).toULongLong();
         if (values[i] > 9007199254740991ULL) // npm semver's maximum safe integer
             return {};
@@ -145,7 +149,8 @@ std::optional<QByteArrayView> installerInTar(QByteArrayView tar, const QString &
 }
 } // namespace
 
-bool stableVersion(const QString &version) { return parts(version).has_value(); }
+bool validVersion(const QString &version) { return parts(version).has_value(); }
+bool stableVersion(const QString &version) { return validVersion(version) && !version.contains('-'); }
 bool newer(const QString &candidate, const QString &installed) {
     const auto left = parts(candidate), right = parts(installed);
     return left && right && *left > *right;
@@ -156,11 +161,18 @@ bool trustedUrl(const QUrl &url) {
            !url.hasFragment() && (url.port() == -1 || url.port() == 443) &&
            (host == "registry.npmjs.org" || host == "registry.npmmirror.com" || host == "cdn.npmmirror.com");
 }
-std::optional<Release> readMetadata(const QByteArray &json) {
+std::optional<Release> readMetadata(const QByteArray &json, Channel channel) {
     const auto root = QJsonDocument::fromJson(json).object();
-    const auto version = root.value("dist-tags").toObject().value("latest").toString();
+    const auto tags = root.value("dist-tags").toObject();
+    auto version = tags.value("latest").toString();
+    if (!stableVersion(version)) version.clear();
+    if (channel == Channel::Beta) {
+        const auto beta = tags.value("beta").toString();
+        if (validVersion(beta) && beta.contains('-') && (version.isEmpty() || newer(beta, version)))
+            version = beta;
+    }
     const auto item = root.value("versions").toObject().value(version).toObject();
-    if (root.value("name").toString() != QLatin1String(PackageName) || !stableVersion(version) ||
+    if (root.value("name").toString() != QLatin1String(PackageName) || version.isEmpty() ||
         item.value("version").toString() != version ||
         (item.contains("name") && item.value("name").toString() != QLatin1String(PackageName)))
         return {};
@@ -191,10 +203,10 @@ QString archivePath(const Release &release, const QString &directory) {
 }
 void cleanInstalledCaches(const QString &installed, const QString &directory) {
     const QDir cache(directory);
-    if (directory.isEmpty() || !cache.isAbsolute() || QFileInfo(directory).isSymLink() || !stableVersion(installed))
+    if (directory.isEmpty() || !cache.isAbsolute() || QFileInfo(directory).isSymLink() || !validVersion(installed))
         return;
     static const QRegularExpression owned(QStringLiteral(
-        R"(\Alivehime-obs-([0-9]+\.[0-9]+\.[0-9]+)-(?:[a-f0-9]{16}-setup\.exe|[a-f0-9]{128}\.tgz)\z)"));
+        R"(\Alivehime-obs-([0-9]+\.[0-9]+\.[0-9]+(?:-beta\.[0-9]+)?)-(?:[a-f0-9]{16}-setup\.exe|[a-f0-9]{128}\.tgz)\z)"));
     const auto files = cache.entryInfoList({QStringLiteral("livehime-obs-*")}, QDir::Files | QDir::NoSymLinks);
     for (const auto &file : files) {
         const auto match = owned.match(file.fileName());
@@ -204,7 +216,7 @@ void cleanInstalledCaches(const QString &installed, const QString &directory) {
 }
 CachedInstaller cacheInstaller(const QByteArray &archive, const Release &release, const QString &directory,
                                bool keepArchive) {
-    if (!stableVersion(release.version) || archive.size() > MaxArchiveBytes ||
+    if (!validVersion(release.version) || archive.size() > MaxArchiveBytes ||
         QCryptographicHash::hash(archive, QCryptographicHash::Sha512) != release.sha512)
         return {{}, {}, QStringLiteral("安装包完整性校验失败")};
     const auto expanded = gunzip(archive);

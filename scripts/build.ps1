@@ -7,6 +7,7 @@ param(
     [ValidateSet('Release', 'RelWithDebInfo')][string]$Configuration = 'RelWithDebInfo',
     [string]$Generator = 'Visual Studio 17 2022',
     [ValidateRange(1, 32)][int]$Jobs = 1,
+    [string]$BetaNumber = '',
     [switch]$SkipBootstrap,
     [switch]$Offline,
     [switch]$SkipTests
@@ -21,7 +22,7 @@ if (!$SkipBootstrap) {
     & (Join-Path $PSScriptRoot 'bootstrap-goim-codecs.ps1') -DependenciesRoot (Join-Path $DependenciesRoot 'goim') -Offline:$Offline
 }
 $configureArgs = @('-S', $projectRoot, '-B', $BuildDirectory, '-G', $Generator, '-A', 'x64',
-    "-DLIVEHIME_DEPS_ROOT=$DependenciesRoot", "-DOBS_ROOT=$ObsRoot", '-DBUILD_TESTING=ON')
+    "-DLIVEHIME_DEPS_ROOT=$DependenciesRoot", "-DOBS_ROOT=$ObsRoot", "-DLIVEHIME_BETA_NUMBER:STRING=$BetaNumber", '-DBUILD_TESTING=ON')
 & cmake @configureArgs
 if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed.' }
 & cmake --build $BuildDirectory --config $Configuration --parallel $Jobs -- /nodeReuse:false
