@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(livehime-obs VERSION 0.4.8 LANGUAGES C CXX)
+project(livehime-obs VERSION 0.4.9 LANGUAGES C CXX)
 
 set(LIVEHIME_BETA_NUMBER "" CACHE STRING "Numeric beta identifier (empty for a stable build)")
 set(release_version "${PROJECT_VERSION}")
@@ -192,7 +192,7 @@ if(BUILD_TESTING)
   target_compile_definitions(diagnostics-test PRIVATE LIVEHIME_OBS_VERSION="${release_version}" LIVEHIME_BETA_BUILD=${beta_build})
   add_test(NAME release-diagnostics COMMAND diagnostics-test)
   add_executable(error-reports-test tests/error-reports-test.cpp src/error-reports.cpp src/error-reports.hpp
-    src/diagnostic-archive.cpp src/beta-diagnostics.cpp)
+    src/diagnostic-archive.cpp src/beta-diagnostics.cpp src/github-issue.cpp)
   target_include_directories(error-reports-test PRIVATE src)
   target_link_libraries(error-reports-test PRIVATE Qt6::Core Qt6::Widgets Qt6::Network diagnostic-zip)
   target_compile_definitions(error-reports-test PRIVATE LIVEHIME_OBS_VERSION="${release_version}"

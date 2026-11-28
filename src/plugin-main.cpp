@@ -255,6 +255,7 @@ void createRoomDock() {
     auto *exportButton = new QPushButton(QStringLiteral("导出诊断包…"), dock);
     QObject::connect(exportButton, &QPushButton::clicked, errors, &livehime::ErrorReports::chooseDestination);
     dock->addUpdateControls(exportButton);
+    dock->addUpdateControls(errors->createIssueButton(dock));
     controller->initialize();
     blog(LOG_INFO,
          "[livehime-obs] Loaded version " LIVEHIME_OBS_VERSION
