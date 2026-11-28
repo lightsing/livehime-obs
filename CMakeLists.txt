@@ -191,11 +191,13 @@ if(BUILD_TESTING)
   target_link_libraries(diagnostics-test PRIVATE Qt6::Core)
   target_compile_definitions(diagnostics-test PRIVATE LIVEHIME_OBS_VERSION="${release_version}" LIVEHIME_BETA_BUILD=${beta_build})
   add_test(NAME release-diagnostics COMMAND diagnostics-test)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_executable(error-reports-test tests/error-reports-test.cpp src/error-reports.cpp src/error-reports.hpp
     src/diagnostic-archive.cpp src/beta-diagnostics.cpp src/github-issue.cpp)
   target_include_directories(error-reports-test PRIVATE src)
   target_link_libraries(error-reports-test PRIVATE Qt6::Core Qt6::Widgets Qt6::Network diagnostic-zip)
   target_compile_definitions(error-reports-test PRIVATE LIVEHIME_OBS_VERSION="${release_version}"
+    LIVEHIME_TEST_PYTHON="${Python3_EXECUTABLE}"
     LIVEHIME_BETA_BUILD=${beta_build} NOMINMAX WIN32_LEAN_AND_MEAN)
   target_compile_options(error-reports-test PRIVATE /W4 /utf-8 /permissive- /EHsc)
   add_test(NAME error-popup-and-zip COMMAND error-reports-test)

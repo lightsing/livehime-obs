@@ -35,10 +35,20 @@ namespace {
 void check(bool ok, const char *name) {
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
 }
-QByteArray tar(const QStringList &args) {
+QByteArray readZip(const QString &path, const QString &member = {}) {
     QProcess process;
-    process.start("tar.exe", args);
-    check(process.waitForFinished(10000) && process.exitCode() == 0, "standard ZIP reader");
+    const auto script = QStringLiteral(
+        "import sys, zipfile\n"
+        "with zipfile.ZipFile(sys.argv[1]) as z:\n"
+        "    data = z.read(sys.argv[2]) if len(sys.argv) == 3 else '\\n'.join(z.namelist()).encode('utf-8')\n"
+        "    sys.stdout.buffer.write(data)\n");
+    QStringList args{"-I", "-X", "utf8", "-c", script, path};
+    if (!member.isEmpty()) args.append(member);
+    process.start(QStringLiteral(LIVEHIME_TEST_PYTHON), args);
+    if (!process.waitForFinished(10000) || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        std::fprintf(stderr, "ZIP reader: %s\n%s", qPrintable(process.errorString()), process.readAllStandardError().constData());
+        check(false, "standard ZIP reader");
+    }
     return process.readAllStandardOutput();
 }
 
@@ -194,9 +204,9 @@ int main(int argc, char **argv) {
         QThread::msleep(5);
     }
     check(QFile::exists(path), "export from dialog");
-    const auto files = tar({"-tf", path}).trimmed().replace("\r", "").split('\n');
+    const auto files = readZip(path).trimmed().split('\n');
     check(files.contains("report.json") && files.size() == (LIVEHIME_BETA_BUILD ? 2 : 1), "only intended archive members");
-    const auto summary = tar({"-xOf", path, "report.json"});
+    const auto summary = readZip(path, "report.json");
     const auto report = QJsonDocument::fromJson(summary).object();
     const auto errors = report["errors"].toArray();
     check(report["plugin_version"] == LIVEHIME_OBS_VERSION && report["obs_version"] == "33.0.1", "runtime versions");
@@ -206,7 +216,7 @@ int main(int argc, char **argv) {
     check(!summary.contains("PRIVATE") && !files.contains("session.ini"), "private text and session excluded");
     check(errors.last().toObject()["reason"] == QStringLiteral("无法读取此图片。"), "local failure reason is actionable");
 #if LIVEHIME_BETA_BUILD
-    const auto log = tar({"-xOf", path, "beta-0.jsonl"});
+    const auto log = readZip(path, "beta-0.jsonl");
     check(files.contains("beta-0.jsonl") && log.contains("startup") && log.contains("plugin.error")
           && !log.contains("PRIVATE"), "beta includes only shareable diagnostics");
     QFile oversized(dir.filePath("diagnostics/beta-0.jsonl"));
@@ -214,7 +224,7 @@ int main(int argc, char **argv) {
     oversized.close();
     const auto partial = dir.filePath("partial.zip");
     check(diagnostics::exportArchive(partial, report).isEmpty(), "unavailable logs do not block export");
-    check(tar({"-xOf", partial, "report.json"}).contains("log_warning"), "incomplete log set explained");
+    check(readZip(partial, "report.json").contains("log_warning"), "incomplete log set explained");
 #endif
     check(!diagnostics::exportArchive(dir.filePath("missing/fail.zip"), {}).isEmpty(), "unwritable destination reported");
     checkIssueFeedback(dir);
