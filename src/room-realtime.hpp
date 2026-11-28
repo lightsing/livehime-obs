@@ -40,6 +40,7 @@ class RoomRealtime final : public QObject {
     bool canSendDanmaku() const { return !stopped_ && uid_ > 0 && roomId_ > 0; }
     bool sendingDanmaku() const { return sendingDanmaku_; }
     void sendDanmaku(const QString &text);
+    bool classicPkUnlocked() const { return classicPkUnlocked_; }
     bool canModerate(qint64 targetUid) const {
         return canSendDanmaku() && !moderating_ && targetUid > 0 && targetUid != uid_;
     }
@@ -68,6 +69,7 @@ class RoomRealtime final : public QObject {
     void contextChanged();
     void stopped();
     void danmakuSendFinished(bool accepted, const QString &message);
+    void classicPkAvailable();
     void moderationFinished(bool accepted, const QString &message);
     void rankConfigChanged();
     void statusChanged(const QString &status);
@@ -88,6 +90,8 @@ class RoomRealtime final : public QObject {
     GoimClient *goim_;
     QTimer refreshTimer_, retryTimer_;
     bool sendingDanmaku_ = false;
+    QString windowSettingsPath_;
+    bool classicPkUnlocked_ = false;
     bool moderating_ = false;
     QPointer<QNetworkReply> moderationReply_;
     QPointer<QNetworkReply> sendReply_;

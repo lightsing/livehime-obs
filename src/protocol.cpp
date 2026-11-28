@@ -183,6 +183,65 @@ Request preLive(qint64 now)
     return {"GET", withQuery(QString::fromLatin1(LiveApi) + "/xlive/app-blink/v1/preLive/PreLive", query),
             {}, serialize(p)};
 }
+Request classicPk(ClassicPkOp op, qint64 uid, qint64 roomId, qint64 pkId, bool continuous,
+                  const QByteArray &csrf, qint64 now)
+{
+    if (uid <= 0 || roomId <= 0 || pkId < 0) return {};
+    auto p = common(now);
+    QString path;
+    bool sign = true;
+    bool changesState = false;
+    switch (op) {
+    case ClassicPkOp::Precheck:
+        path = QStringLiteral("v1/battle/pkPreCheck");
+        p["room_id"] = QByteArray::number(roomId);
+        p["pk_version"] = "1";
+        p["mobi_app"] = "pc_link";
+        p["uid"] = QByteArray::number(uid);
+        break;
+    case ClassicPkOp::Join:
+    case ClassicPkOp::Cancel:
+        path = op == ClassicPkOp::Join ? QStringLiteral("v1/battle/join") : QStringLiteral("v1/battle/cancel");
+        p["room_id"] = QByteArray::number(roomId);
+        p["battle_type"] = "1";
+        if (op == ClassicPkOp::Cancel) {
+            p["sub_type"] = "0";
+            p["need_warn"] = "0";
+        }
+        changesState = true;
+        break;
+    case ClassicPkOp::Info:
+        path = QStringLiteral("v1/battle/getInfoById");
+        p["room_id"] = QByteArray::number(roomId);
+        p["pk_id"] = QByteArray::number(pkId);
+        p["is_anchor"] = "1";
+        break;
+    case ClassicPkOp::Exit:
+        if (csrf.isEmpty() || !pkId) return {};
+        path = QStringLiteral("v2/pk/exit");
+        p["stop_pk"] = "1";
+        break;
+    case ClassicPkOp::ReadContinuous:
+        path = QStringLiteral("v1/battle/autoMatchSwitchStatus");
+        sign = false;
+        break;
+    case ClassicPkOp::SetContinuous:
+        path = QStringLiteral("v1/battle/updateAutoMatchSwitch");
+        p["ruid"] = QByteArray::number(uid);
+        p["pk_version"] = "1";
+        p["status"] = continuous ? "1" : "0";
+        changesState = true;
+        sign = false;
+        break;
+    }
+    const auto url = QString::fromLatin1(LiveApi) + QStringLiteral("/xlive/general-interface/") + path;
+    auto params = sign ? signedParams(p) : p;
+    if (op == ClassicPkOp::Exit) {
+        addCsrf(params, csrf);
+        return {"POST", QUrl(url), serialize(params), serialize(p), {}, true};
+    }
+    return {"GET", withQuery(url, params), {}, sign ? serialize(p) : QByteArray{}, {}, changesState};
+}
 Request danmuInfo(qint64 roomId, qint64 now)
 {
     auto p = common(now);
@@ -389,7 +448,7 @@ ApiError transportFailure(int networkCode, int httpStatus, bool timedOut, bool t
                          .arg(networkCode).arg(QString::fromLatin1(name ? name : "UnknownEnum")).arg(httpStatus);
     return error;
 }
-Result<QJsonObject> envelope(const QByteArray &json, bool requireMessage)
+Result<QJsonObject> envelope(const QByteArray &json, bool requireMessage, bool classicInfo)
 {
     QJsonParseError parseError;
     const auto document = QJsonDocument::fromJson(json, &parseError);
@@ -405,6 +464,11 @@ Result<QJsonObject> envelope(const QByteArray &json, bool requireMessage)
         ApiError error{ApiError::Kind::Verification, QStringLiteral("需要在哔哩哔哩完成身份核验后再开播。"), static_cast<int>(code)};
         error.verificationUrl = safeUserUrl(data.value(QStringLiteral("qr")).toString());
         return error;
+    }
+    if (classicInfo && code == 6204) {
+        // This endpoint uses 6204 both for an empty queue and for server-side requeue.
+        return QJsonObject{{"status", 0}, {"match_status", integer(data.value("auto_match_status")) == 2 ? 1 : 0},
+                           {"timestamp", data.value("timestamp")}};
     }
     if (code != 0) {
         ApiError error{code == -101 || code == -111 ? ApiError::Kind::Authentication : ApiError::Kind::Api,

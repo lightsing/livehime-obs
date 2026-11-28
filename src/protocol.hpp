@@ -21,7 +21,7 @@ struct ApiError {
     int code = 0;
     int httpStatus = 0;
     QUrl verificationUrl;
-    // The server may have committed a POST when its response was lost.
+    // A state-changing request may have committed when its response was lost.
     bool outcomeUnknown = false;
     int networkCode = 0; // QNetworkReply enum only; never a raw errorString/URL.
 };
@@ -31,6 +31,7 @@ using Done = std::monostate;
 
 struct UserInfo { qint64 uid = 0; QString name; };
 enum class UserModeration { Block, Mute, AppointAdmin };
+enum class ClassicPkOp { Precheck, Join, Cancel, Info, Exit, ReadContinuous, SetContinuous };
 struct AreaInfo { int id = 0; int parentId = 0; QString name; QString parentName; };
 struct RoomInfo {
     qint64 roomId = 0;
@@ -62,6 +63,7 @@ struct Request {
     QByteArray body;
     QByteArray signedBytes;
     QByteArray clientTraceId = {};
+    bool changesState = false;
 };
 QByteArray escape(const QByteArray &bytes);
 QByteArray serialize(const Params &params);
@@ -73,6 +75,8 @@ Request start(qint64 roomId, int areaId, const QByteArray &csrf, const QDateTime
 Request stop(qint64 roomId, const QByteArray &csrf, qint64 timestampSeconds);
 Request room(qint64 uid, qint64 timestampSeconds);
 Request preLive(qint64 timestampSeconds);
+Request classicPk(ClassicPkOp operation, qint64 uid, qint64 roomId, qint64 pkId, bool continuous,
+                  const QByteArray &csrf, qint64 timestampSeconds);
 Request danmuInfo(qint64 roomId, qint64 timestampSeconds);
 bool validDanmakuText(const QString &text);
 Request sendDanmaku(qint64 roomId, const QString &text, const QByteArray &csrf, const QDateTime &sentAt);
@@ -94,7 +98,7 @@ bool cookieMatches(const QNetworkCookie &cookie, const QUrl &url);
 QUrl safeUserUrl(const QString &value);
 ApiError transportFailure(int networkCode, int httpStatus, bool timedOut, bool tlsAvailable,
                           bool mutation);
-Result<QJsonObject> envelope(const QByteArray &json, bool requireMessage = false);
+Result<QJsonObject> envelope(const QByteArray &json, bool requireMessage = false, bool classicInfo = false);
 Result<UserInfo> parseUser(const QJsonObject &data);
 Result<QList<AreaInfo>> parseAreas(const QByteArray &json);
 Result<RoomInfo> parseRoom(const QJsonObject &data);

@@ -167,7 +167,7 @@ std::optional<ApiError> BiliClient::sessionError() const
 }
 
 QNetworkReply *BiliClient::send(const protocol::Request &draft, Callback<QJsonObject> callback,
-                      QHttpMultiPart *multipart, bool web, bool requireMessage)
+                      QHttpMultiPart *multipart, bool web, bool requireMessage, bool classicInfo)
 {
     if (!protocol::isApiUrl(draft.url) || (draft.method != "GET" && draft.method != "POST")) {
         delete multipart;
@@ -198,7 +198,8 @@ QNetworkReply *BiliClient::send(const protocol::Request &draft, Callback<QJsonOb
                   multipart ? manager_->post(request, multipart) : manager_->post(request, draft.body);
 #if LIVEHIME_BETA_BUILD
     static const QSet<QString> operations{"nav", "startLive", "stopLive", "GetInfo", "PreLive", "getDanmuInfo",
-        "sendmsg", "UpdatePreLiveInfo", "AddBlack", "AddSilentUser", "appoint", "queryContributionRank", "topListNew"};
+        "sendmsg", "UpdatePreLiveInfo", "AddBlack", "AddSilentUser", "appoint", "queryContributionRank", "topListNew",
+        "pkPreCheck", "join", "cancel", "getInfoById", "exit", "autoMatchSwitchStatus", "updateAutoMatchSwitch"};
     auto operation = draft.url.fileName();
     if (!operations.contains(operation)) operation = QStringLiteral("other");
     QElapsedTimer timer;
@@ -219,7 +220,7 @@ QNetworkReply *BiliClient::send(const protocol::Request &draft, Callback<QJsonOb
     if (multipart) multipart->setParent(reply);
     pending_.insert(reply);
     const auto generation = generation_;
-    const bool mutation = draft.method == "POST";
+    const bool mutation = draft.method == "POST" || draft.changesState;
     struct Response { QByteArray bytes; bool timedOut = false; bool oversized = false; };
     const auto state = std::make_shared<Response>();
     auto *deadline = new QTimer(reply);
@@ -231,7 +232,7 @@ QNetworkReply *BiliClient::send(const protocol::Request &draft, Callback<QJsonOb
         if (state->bytes.size() > MaxResponseBytes) { state->oversized = true; reply->abort(); }
     });
     connect(reply, &QNetworkReply::finished, this,
-        [this, reply, deadline, state, generation, mutation, requireMessage, callback = std::move(callback)]() mutable {
+        [this, reply, deadline, state, generation, mutation, requireMessage, classicInfo, callback = std::move(callback)]() mutable {
         pending_.remove(reply);
         deadline->stop();
         reply->deleteLater();
@@ -263,7 +264,7 @@ QNetworkReply *BiliClient::send(const protocol::Request &draft, Callback<QJsonOb
             fail(ApiError::Kind::InvalidResponse, QStringLiteral("服务器响应超过大小限制。"), mutation);
             return;
         }
-        auto result = protocol::envelope(state->bytes, requireMessage);
+        auto result = protocol::envelope(state->bytes, requireMessage, classicInfo);
         if (auto *error = std::get_if<ApiError>(&result)) {
             error->httpStatus = status;
             if (error->kind == ApiError::Kind::InvalidResponse) error->outcomeUnknown = mutation;
@@ -305,6 +306,14 @@ QNetworkReply *BiliClient::moderateUser(UserModeration action, qint64 anchorId, 
         else callback(Done{});
     });
 }
+void BiliClient::classicPk(ClassicPkOp op, qint64 uid, qint64 room, qint64 pkId, bool continuous,
+                           Callback<QJsonObject> callback)
+{
+    if (const auto error = sessionError()) { callback(*error); return; }
+    const auto request = protocol::classicPk(op, uid, room, pkId, continuous, csrf(), now());
+    send(request, std::move(callback), nullptr, false, false, op == ClassicPkOp::Info);
+}
+
 QNetworkReply *BiliClient::fetchRealtime(const protocol::Request &request, Callback<QJsonObject> callback)
 {
     if (const auto error = sessionError()) { callback(*error); return nullptr; }

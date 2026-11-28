@@ -11,6 +11,7 @@ namespace livehime {
 class SessionStore final {
 public:
     explicit SessionStore(QString storageDirectory);
+    const QString &directory() const { return directory_; }
     QList<QNetworkCookie> loadCookies(QString *error = nullptr) const;
     bool saveCookies(const QList<QNetworkCookie> &cookies, QString *error = nullptr) const;
     bool clear(QString *error = nullptr) const;

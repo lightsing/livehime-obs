@@ -55,6 +55,7 @@ public:
     bool coverLoading() const { return coverLoading_; }
     QString coverError() const { return coverError_; }
     QString browserDataDirectory() const { return store_.browserDataDirectory(); }
+    const QString &storageDirectory() const { return store_.directory(); }
     QString deviceId() const { return deviceId_; }
     BiliClient *client() const { return client_; }
     quint64 accountEpoch() const { return accountEpoch_; }

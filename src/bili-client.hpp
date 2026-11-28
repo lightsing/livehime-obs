@@ -30,6 +30,8 @@ public:
     void uploadCover(const QString &filePath, Callback<QUrl> callback);
     void startLive(qint64 roomId, int areaId, Callback<LiveSession> callback);
     void stopLive(qint64 roomId, Callback<Done> callback);
+    void classicPk(ClassicPkOp operation, qint64 uid, qint64 roomId, qint64 pkId, bool continuous,
+                   Callback<QJsonObject> callback);
     QNetworkReply *sendDanmaku(qint64 roomId, const QString &text, Callback<Done> callback);
     QNetworkReply *moderateUser(UserModeration action, qint64 anchorId, qint64 roomId, qint64 targetUid,
                                 const QString &message, int durationHours, Callback<Done> callback);
@@ -44,7 +46,8 @@ private:
     void cancelRequests();
     QByteArray csrf() const;
     QNetworkReply *send(const protocol::Request &request, Callback<QJsonObject> callback,
-              QHttpMultiPart *multipart = nullptr, bool web = false, bool requireMessage = false);
+              QHttpMultiPart *multipart = nullptr, bool web = false, bool requireMessage = false,
+              bool classicInfo = false);
     void anonymousGet(const QUrl &url, Callback<QByteArray> callback, qint64 maxBytes,
                       const QByteArray &accept);
     std::optional<ApiError> sessionError() const;

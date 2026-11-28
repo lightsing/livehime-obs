@@ -130,6 +130,26 @@ int main(int argc, char **argv) {
     service.moderateUser(UserModeration::Block, 999, service.contextEpoch());
     check(!service.canModerate(999) && management.isEmpty(), "signed-out management cannot write");
     signIn(controller);
+    int unlocks = 0;
+    QObject::connect(&service, &RoomRealtime::classicPkAvailable, [&] { ++unlocks; });
+    check(!service.classicPkUnlocked(), "new plugin configuration starts locked");
+    service.sendDanmaku(QStringLiteral("KFCvme50"));
+    check(sends.size() == 1 && !unlocks, "near match remains ordinary chat");
+    sends.last()(Done{});
+    service.sendDanmaku(QStringLiteral("kfcvme50"));
+    check(sends.size() == 1 && service.classicPkUnlocked() && unlocks == 1 && !service.sendingDanmaku(),
+          "first exact submission is consumed locally");
+    service.sendDanmaku(QStringLiteral("kfcvme50"));
+    check(sends.size() == 2 && sentText == QStringLiteral("kfcvme50") && unlocks == 1,
+          "second exact submission reaches the normal send API");
+    sends.last()(Done{});
+    {
+        LiveController nextLaunch(directory.path());
+        RoomRealtime restored(&nextLaunch);
+        check(restored.classicPkUnlocked(), "unlock survives creating a fresh plugin session");
+    }
+    sends.clear();
+    acknowledged = 0;
     const auto initialRoom = service.contextEpoch();
     int managementEvents = 0;
     bool managementAccepted = false;

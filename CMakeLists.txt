@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(livehime-obs VERSION 0.4.9 LANGUAGES C CXX)
+project(livehime-obs VERSION 0.4.10 LANGUAGES C CXX)
 
 set(LIVEHIME_BETA_NUMBER "" CACHE STRING "Numeric beta identifier (empty for a stable build)")
 set(release_version "${PROJECT_VERSION}")
@@ -168,6 +168,14 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native-stream-con
 endif()
 
 if(BUILD_TESTING)
+  add_executable(classic-pk-test tests/classic-pk-test.cpp src/classic-pk.cpp src/classic-pk.hpp
+    src/classic-pk-window.cpp src/classic-pk-window.hpp src/protocol.cpp src/protocol.hpp)
+  target_include_directories(classic-pk-test PRIVATE src)
+  target_link_libraries(classic-pk-test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
+  target_compile_options(classic-pk-test PRIVATE /W4 /permissive- /utf-8 /EHsc)
+  add_test(NAME interaction-window-session COMMAND classic-pk-test)
+  set_tests_properties(interaction-window-session PROPERTIES TIMEOUT 20 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit"
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QPA_PLATFORM_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins/platforms")
   add_update_helper(update-helper-fixture)
   target_compile_definitions(update-helper-fixture PRIVATE LIVEHIME_UPDATE_TEST_FIXTURE)
   add_test(NAME update-after-obs-exit COMMAND pwsh -NoProfile -File

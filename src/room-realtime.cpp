@@ -2,8 +2,10 @@
 #include "goim-client.hpp"
 #include "room-interaction.hpp"
 #include <QDateTime>
+#include <QDir>
 #include <QRandomGenerator>
 #include <QSet>
+#include <QSettings>
 #include <utility>
 
 namespace livehime {
@@ -15,6 +17,9 @@ QString failure(const ApiError &error) {
 } // namespace
 RoomRealtime::RoomRealtime(LiveController *controller, QObject *parent)
     : QObject(parent), controller_(controller), goim_(new GoimClient(this)) {
+    windowSettingsPath_ = QDir(controller->storageDirectory()).filePath(QStringLiteral("window-preferences.ini"));
+    QSettings settings(windowSettingsPath_, QSettings::IniFormat);
+    classicPkUnlocked_ = settings.value(QStringLiteral("windows/classicPk"), false).toBool();
     connect(controller_, &LiveController::changed, this, &RoomRealtime::syncContext);
     connect(controller_, &QObject::destroyed, this, [this] { stop(); });
     connect(controller_, &LiveController::roomChanged, this, [this] {
@@ -290,6 +295,21 @@ void RoomRealtime::sendDanmaku(const QString &text) {
     }
     if (!protocol::validDanmakuText(text)) {
         emit danmakuSendFinished(false, QStringLiteral("请输入非空的单行弹幕。"));
+        return;
+    }
+    if (!classicPkUnlocked_ && text == QStringLiteral("kfcvme50")) {
+        QSettings settings(windowSettingsPath_, QSettings::IniFormat);
+        settings.setValue(QStringLiteral("windows/classicPk"), true);
+        settings.sync();
+        if (settings.status() != QSettings::NoError) {
+            const auto detail = QStringLiteral("无法保存窗口设置，请检查插件配置目录。");
+            emit problem(PluginIssue::local(QStringLiteral("保存窗口设置"), detail));
+            emit danmakuSendFinished(false, detail);
+            return;
+        }
+        classicPkUnlocked_ = true;
+        emit classicPkAvailable();
+        emit danmakuSendFinished(true, QStringLiteral("已解锁，可在「停靠窗口」菜单中打开双人经典 PK。"));
         return;
     }
     sendingDanmaku_ = true;

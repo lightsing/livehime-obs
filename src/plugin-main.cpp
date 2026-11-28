@@ -1,5 +1,6 @@
 #include "beta-diagnostics.hpp"
 #include "error-reports.hpp"
+#include "classic-pk-window.hpp"
 #include "dock-focus.hpp"
 #include "floating-windows.hpp"
 #include "moderation-alerts.hpp"
@@ -17,6 +18,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QSettings>
+#include <QMenu>
 #include <QStandardPaths>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -43,10 +45,47 @@ QPointer<livehime::RoomRealtime> realtime;
 QPointer<FloatingWindows> windows;
 QPointer<livehime::UpdateController> updates;
 QPointer<livehime::ErrorReports> errors;
+QPointer<QAction> pkAction;
+QPointer<livehime::ClassicPkWindow> pkWindow;
 std::array<QPointer<QDockWidget>, FloatingWindows::DockCount> realtimeDocks;
 bool waitingForFrontend = false;
 bool frontendValid = true;
 void createRoomDock();
+void openClassicPk(QWidget *window) {
+    using namespace livehime;
+    if (!controller || !realtime || !realtime->classicPkUnlocked()) return;
+    if (!pkWindow) {
+        auto *pk = new ClassicPkController([](ClassicPkOp op, qint64 uid, qint64 room, qint64 id,
+                                              bool continuous, Callback<QJsonObject> done) {
+            controller->client()->classicPk(op, uid, room, id, continuous, std::move(done));
+        });
+        pkWindow = new ClassicPkWindow(pk, window);
+        pk->setParent(pkWindow);
+        QObject::connect(pk, &ClassicPkController::problem, errors, &ErrorReports::report);
+        auto sync = [pk] {
+            const bool valid = controller && controller->authenticated() && controller->roomMatchesAccount();
+            const auto room = valid && controller->hasRemoteSession() ? controller->room().roomId : 0;
+            pk->setContext(controller ? controller->accountEpoch() : 0, valid ? controller->user().uid : 0,
+                           room, room && controller->state() != LiveController::State::Stopping);
+        };
+        QObject::connect(controller, &LiveController::changed, pk, sync);
+        QObject::connect(controller, &LiveController::roomChanged, pk, sync);
+        QObject::connect(realtime, &RoomRealtime::events, pk, &ClassicPkController::receive);
+        QObject::connect(realtime, &RoomRealtime::connectionChanged, pk, [pk](const RealtimeConnection &c) {
+            if (c.phase == RealtimeConnection::Phase::Connected) pk->refresh();
+        });
+        QObject::connect(realtime, &RoomRealtime::stopped, pk, [pk] { pk->setContext(0, 0, 0, false); });
+        sync();
+    }
+    if (pkWindow->isMinimized()) pkWindow->showNormal();
+    else pkWindow->show();
+    pkWindow->raise();
+    pkWindow->activateWindow();
+}
+void removeClassicPk() {
+    delete pkAction.data();
+    delete pkWindow.data();
+}
 void removeRealtimeDocks() {
     if (!frontendValid)
         return;
@@ -60,6 +99,7 @@ void frontendReady(obs_frontend_event event, void *) {
         // valid frontend. No frontend API is used after the callback returns.
         obs_frontend_remove_event_callback(frontendReady, nullptr);
         waitingForFrontend = false; // Frontend APIs are invalid after this event.
+        removeClassicPk();
         delete errors.data();
         if (updates) {
             updates->onObsExit();
@@ -189,6 +229,14 @@ void createRoomDock() {
     realtime = new livehime::RoomRealtime(controller, dockContainer);
     QObject::connect(controller, &livehime::LiveController::problem, errors, &livehime::ErrorReports::report);
     QObject::connect(realtime, &livehime::RoomRealtime::problem, errors, &livehime::ErrorReports::report);
+    if (auto *menu = window->findChild<QMenu *>(QStringLiteral("menuDocks"))) {
+        pkAction = menu->addAction(QStringLiteral("B站 · 双人经典 PK"));
+        pkAction->setVisible(realtime->classicPkUnlocked());
+        QObject::connect(realtime, &livehime::RoomRealtime::classicPkAvailable, pkAction, [] {
+            pkAction->setVisible(true);
+        });
+        QObject::connect(pkAction, &QAction::triggered, window, [window] { openClassicPk(window); });
+    }
     new livehime::ModerationAlerts(realtime, window);
     std::array<QDockWidget *, FloatingWindows::DockCount> registeredDocks;
     std::ranges::copy(realtimeDocks, registeredDocks.begin());
@@ -265,6 +313,7 @@ void createRoomDock() {
 } // namespace
 
 void obs_module_unload(void) {
+    removeClassicPk();
     delete errors.data();
     delete updates.data();
     if (frontendValid) {
