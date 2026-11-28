@@ -25,11 +25,11 @@
 namespace livehime {
 ErrorReports::ErrorReports(QString obsVersion, QWidget *parent) : QDialog(parent), obsVersion_(std::move(obsVersion)) {
     timer_.start();
-    setWindowTitle(QStringLiteral("B站直播 · 错误与诊断"));
+    setWindowTitle(QStringLiteral("B站直播 · 诊断与反馈"));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
     setAttribute(Qt::WA_QuitOnClose, false);
     auto *layout = new QVBoxLayout(this);
-    message_ = new QLabel(this);
+    message_ = new QLabel(QStringLiteral("本次运行尚未记录插件错误。"), this);
     result_ = new QLabel(this);
     issueStatus_ = new QLabel(this);
     for (auto *label : {message_, result_, issueStatus_}) {
