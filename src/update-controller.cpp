@@ -63,6 +63,18 @@ UpdateController::UpdateController(const QString &configDir, const QString &cach
     if (betaUpdates_ && !settings_.contains("channel")) settings_.setValue("channel", "beta");
     updater_.setChannel(betaUpdates_ ? update::Channel::Beta : update::Channel::Stable);
     connect(&updater_, &PluginUpdater::changed, this, &UpdateController::onUpdateChanged);
+    connect(&updater_, &PluginUpdater::updateFailed, this, &UpdateController::updateFailed);
+    // The deferred installer starts during OBS shutdown. Report handoff failures on the next launch.
+    if (settings_.contains("exitFailure")) {
+        QTimer::singleShot(0, this, [this] {
+            const auto reason = settings_.value("exitFailure").toString();
+            settings_.remove("exitFailure");
+            if (reason == "layout")
+                emit updateFailed(QStringLiteral("上次退出时无法识别插件安装位置，更新未启动。"));
+            else if (reason == "helper")
+                emit updateFailed(QStringLiteral("上次退出时无法启动更新助手，请重新检查更新。"));
+        });
+    }
     auto backgroundCheck = [this] {
         if (!automatic_ || exiting_) return;
         const auto state = updater_.state();
@@ -189,6 +201,8 @@ void UpdateController::onObsExit() {
         const auto registered = registeredSharedHost(data);
         if (!registered.isEmpty()) obsRoot = registered;
     } else {
+        settings_.setValue("exitFailure", "layout");
+        settings_.sync();
         qWarning("Livehime OBS: cannot identify plugin layout for update");
         return;
     }
@@ -198,7 +212,10 @@ void UpdateController::onObsExit() {
                            "--sha256", QString::fromLatin1(updater_.installerSha256()),
                            "--obs-dir", QDir::toNativeSeparators(obsRoot),
                            "--bundle-dir", QDir::toNativeSeparators(bundle.absolutePath())};
-    if (helper.isEmpty() || !QProcess::startDetached(helper, args, cacheDir_))
+    if (helper.isEmpty() || !QProcess::startDetached(helper, args, cacheDir_)) {
+        settings_.setValue("exitFailure", "helper");
+        settings_.sync();
         qWarning("Livehime OBS: could not start the deferred update helper");
+    }
 }
 } // namespace livehime

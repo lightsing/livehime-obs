@@ -1,4 +1,5 @@
 #include "beta-diagnostics.hpp"
+#include "error-reports.hpp"
 #include "dock-focus.hpp"
 #include "floating-windows.hpp"
 #include "moderation-alerts.hpp"
@@ -14,6 +15,7 @@
 #include <QLabel>
 #include <QMainWindow>
 #include <QPointer>
+#include <QPushButton>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QVBoxLayout>
@@ -32,6 +34,7 @@ MODULE_EXPORT const char *obs_module_author(void) { return "Livehime OBS contrib
 
 namespace {
 using livehime::FloatingWindows;
+using livehime::PluginIssue;
 QPointer<livehime::RoomDock> dock;
 QPointer<QWidget> dockContainer;
 QPointer<QLabel> loadingLabel;
@@ -39,6 +42,7 @@ QPointer<livehime::LiveController> controller;
 QPointer<livehime::RoomRealtime> realtime;
 QPointer<FloatingWindows> windows;
 QPointer<livehime::UpdateController> updates;
+QPointer<livehime::ErrorReports> errors;
 std::array<QPointer<QDockWidget>, FloatingWindows::DockCount> realtimeDocks;
 bool waitingForFrontend = false;
 bool frontendValid = true;
@@ -56,6 +60,7 @@ void frontendReady(obs_frontend_event event, void *) {
         // valid frontend. No frontend API is used after the callback returns.
         obs_frontend_remove_event_callback(frontendReady, nullptr);
         waitingForFrontend = false; // Frontend APIs are invalid after this event.
+        delete errors.data();
         if (updates) {
             updates->onObsExit();
             delete updates.data();
@@ -103,6 +108,8 @@ void obs_module_post_load(void) {
     auto *window = static_cast<QWidget *>(obs_frontend_get_main_window());
     if (!window)
         return;
+    waitingForFrontend = true;
+    obs_frontend_add_event_callback(frontendReady, nullptr);
     dockContainer = new QWidget(window);
     auto *layout = new QVBoxLayout(dockContainer);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -149,19 +156,23 @@ void obs_module_post_load(void) {
         removeRealtimeDocks();
         blog(LOG_ERROR, "[livehime-obs] Cannot register realtime docks; check for duplicate plugin copies");
     }
-    waitingForFrontend = true;
-    obs_frontend_add_event_callback(frontendReady, nullptr);
 }
 
 namespace {
 void createRoomDock() {
     auto *window = static_cast<QWidget *>(obs_frontend_get_main_window());
-    if (!window || !dockContainer)
+    if (!window)
         return;
+    errors = new livehime::ErrorReports(QString::fromUtf8(obs_get_version_string()), window);
+    if (!dockContainer) {
+        errors->report(PluginIssue::local(QStringLiteral("插件初始化"), QStringLiteral("无法注册 B站直播面板，请检查是否安装了多份插件。")));
+        return;
+    }
     char *configPath = obs_module_config_path("");
     if (!configPath) {
         if (loadingLabel)
             loadingLabel->setText(QStringLiteral("无法读取插件配置目录。"));
+        errors->report(PluginIssue::local(QStringLiteral("插件初始化"), QStringLiteral("无法读取插件配置目录。")));
         return;
     }
     const QString storage = QString::fromUtf8(configPath);
@@ -170,17 +181,21 @@ void createRoomDock() {
         blog(LOG_ERROR, "[livehime-obs] Cannot create plugin storage directory");
         if (loadingLabel)
             loadingLabel->setText(QStringLiteral("无法创建插件配置目录。"));
+        errors->report(PluginIssue::local(QStringLiteral("插件初始化"), QStringLiteral("无法创建插件配置目录。")));
         return;
     }
     livehime::diagnostics::start(storage);
     controller = new livehime::LiveController(storage, dockContainer);
     realtime = new livehime::RoomRealtime(controller, dockContainer);
+    QObject::connect(controller, &livehime::LiveController::problem, errors, &livehime::ErrorReports::report);
+    QObject::connect(realtime, &livehime::RoomRealtime::problem, errors, &livehime::ErrorReports::report);
     new livehime::ModerationAlerts(realtime, window);
     std::array<QDockWidget *, FloatingWindows::DockCount> registeredDocks;
     std::ranges::copy(realtimeDocks, registeredDocks.begin());
     if (std::ranges::find(registeredDocks, nullptr) == registeredDocks.end())
         windows = new FloatingWindows(realtime, storage, window, registeredDocks);
     dock = new livehime::RoomDock(controller, dockContainer);
+    QObject::connect(dock, &livehime::RoomDock::problem, errors, &livehime::ErrorReports::report);
     if (windows) {
         QObject::connect(dock, &livehime::RoomDock::openRealtimeWindow, windows,
                          &FloatingWindows::showWindow);
@@ -188,8 +203,10 @@ void createRoomDock() {
             if (windows)
                 windows->showWindow(0);
         });
-    } else
+    } else {
         dock->setRealtimeAvailable(false);
+        errors->report(PluginIssue::local(QStringLiteral("初始化实时面板"), QStringLiteral("部分实时面板注册失败，请检查是否安装了多份插件。")));
+    }
     for (int i = 0; i < FloatingWindows::DockCount; ++i) {
         const auto label = (QStringLiteral("B站 · ") + FloatingWindows::dockTitle(i)).toUtf8();
         auto *action = static_cast<QAction *>(obs_frontend_add_tools_menu_qaction(label.constData()));
@@ -216,6 +233,7 @@ void createRoomDock() {
              controlsError.toUtf8().constData());
         if (loadingLabel)
             loadingLabel->setText(controlsError);
+        errors->report(PluginIssue::local(QStringLiteral("连接 OBS 控制按钮"), controlsError));
         delete dock.data();
         return;
     }
@@ -223,12 +241,20 @@ void createRoomDock() {
     dockContainer->layout()->addWidget(dock);
     char *helperPath = obs_module_file("livehime-update-helper.exe");
     const auto cacheBase = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
-    if (helperPath && !cacheBase.isEmpty()) {
+    if (helperPath && QFileInfo::exists(QString::fromUtf8(helperPath)) && !cacheBase.isEmpty()) {
         updates = new livehime::UpdateController(storage, QDir(cacheBase).filePath("livehime-obs/updates"),
                                                  QFileInfo(QString::fromUtf8(helperPath)).absoluteFilePath());
+        QObject::connect(updates, &livehime::UpdateController::updateFailed, errors, [](const QString &detail) {
+            errors->report(PluginIssue::local(QStringLiteral("更新插件"), detail));
+        });
         dock->addUpdateControls(updates->createControls(dock));
+    } else {
+        errors->report(PluginIssue::local(QStringLiteral("更新插件"), QStringLiteral("无法初始化更新组件，请检查插件安装和缓存目录。")));
     }
     bfree(helperPath);
+    auto *exportButton = new QPushButton(QStringLiteral("导出诊断包…"), dock);
+    QObject::connect(exportButton, &QPushButton::clicked, errors, &livehime::ErrorReports::chooseDestination);
+    dock->addUpdateControls(exportButton);
     controller->initialize();
     blog(LOG_INFO,
          "[livehime-obs] Loaded version " LIVEHIME_OBS_VERSION
@@ -238,6 +264,7 @@ void createRoomDock() {
 } // namespace
 
 void obs_module_unload(void) {
+    delete errors.data();
     delete updates.data();
     if (frontendValid) {
         obs_frontend_remove_event_callback(frontendReady, nullptr);

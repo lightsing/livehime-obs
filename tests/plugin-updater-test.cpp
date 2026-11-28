@@ -273,6 +273,9 @@ int main(int argc, char **argv) {
     installed.queued = {Response{mirrored},Response{official}};
     installed.check(); installed.wait(State::UpToDate);
     OfflineUpdater untrusted("1.0.0",dir.path());
+    QStringList updateFailures;
+    QObject::connect(&untrusted, &PluginUpdater::updateFailed, &untrusted,
+                     [&updateFailures](const QString &detail) { updateFailures.append(detail); });
     untrusted.queued = {Response{mirrored}, Response{{},302,QUrl(mirror)}};
     untrusted.check(); untrusted.wait(State::Error);
     expect(untrusted.seen.size()==2,"unsigned mirror cannot impersonate official metadata through redirect");
@@ -282,6 +285,8 @@ int main(int argc, char **argv) {
                         Response{{},200,{},update::MaxArchiveBytes+1}};
     untrusted.download(); untrusted.wait(State::Available);
     expect(untrusted.installerPath().isEmpty(),"failed download remains retryable without installer");
+    expect(updateFailures.size() == 2 && updateFailures.last() == untrusted.status(),
+           "metadata and exhausted download failures are each reported once");
     untrusted.queued = {Response{archive}};
     untrusted.download(); untrusted.wait(State::Ready);
     untrusted.setChannel(Channel::Beta);

@@ -4,6 +4,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QLockFile>
 #include <QMutex>
@@ -23,6 +24,29 @@ void start(const QString &configDir) {
         if (!QDir().mkpath(directory)) directory.clear();
     }
     record("startup", {{"version", LIVEHIME_OBS_VERSION}, {"qt", qVersion()}});
+}
+
+QString readLogs(QMap<QString, QByteArray> &logs) {
+    QMutexLocker guard(&mutex);
+    if (directory.isEmpty()) return QStringLiteral("诊断日志目录不可用。");
+    QDir dir(directory);
+    if (QFileInfo(directory).isSymLink() || QFileInfo(directory).isJunction())
+        return QStringLiteral("诊断目录为链接，无法读取日志。");
+    QLockFile lock(dir.filePath("beta.lock"));
+    if (!lock.tryLock(1000)) return QStringLiteral("诊断日志忙，请重试。");
+    for (int i = 0; i < FileCount; ++i) {
+        const QString name = QStringLiteral("beta-%1.jsonl").arg(i);
+        const QFileInfo info(dir.filePath(name));
+        if (!info.exists() || info.isSymLink() || !info.isFile()) continue;
+        QFile file(info.filePath());
+        if (!file.open(QIODevice::ReadOnly) || file.size() > FileBytes)
+            return QStringLiteral("无法读取诊断日志。");
+        const auto bytes = file.read(FileBytes + 1);
+        if (bytes.size() != file.size() || bytes.size() > FileBytes || file.error() != QFileDevice::NoError)
+            return QStringLiteral("诊断日志读取不完整，请重试。");
+        logs.insert(name, bytes);
+    }
+    return {};
 }
 
 void record(const QString &event, QJsonObject fields) {

@@ -1,5 +1,6 @@
 #pragma once
 #include "bili-client.hpp"
+#include "plugin-issue.hpp"
 #include "obs-bridge.hpp"
 #include "session-store.hpp"
 #include <QObject>
@@ -62,13 +63,14 @@ public:
 signals:
     void changed();
     void roomChanged();
+    void problem(const PluginIssue &issue);
     void metadataSaved();
     void titleSyncChanged();
     void areasChanged();
     void coverChanged();
 private:
-    void setState(State state, const QString &message);
-    void fail(const ApiError &error, State fallback);
+    void setState(State state, const QString &message, bool reportRecovery = true);
+    void fail(const ApiError &error, State fallback, const QString &operation);
     void validate();
     void loadRoom(std::function<void()> continuation = {});
     enum class MetadataKind { None, Title, Cover };

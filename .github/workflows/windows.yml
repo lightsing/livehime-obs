@@ -92,7 +92,7 @@ jobs:
             foreach ($required in @('protocol-vectors', 'session-store-roundtrip', 'controller-state-transitions',
                                      'obs-bridge-lifecycle', 'ui-crop-smoke', 'native-stream-controls',
                                      'realtime-floating-windows', 'danmaku-emotes',
-                                     'npm-registry-signature', 'npm-plugin-updater', 'update-preferences', 'release-diagnostics', 'update-after-obs-exit')) {
+                                     'npm-registry-signature', 'npm-plugin-updater', 'update-preferences', 'release-diagnostics', 'error-popup-and-zip', 'update-after-obs-exit')) {
               if ($required -notin $testNames) { throw "Required CTest test is missing: $required" }
             }
           } finally { Stop-Transcript | Out-Null }
@@ -290,7 +290,7 @@ jobs:
                         $recipesArchive, "$recipesArchive.sha256", 'qt-source-provenance.json', 'qt-source-provenance.json.sha256')
           if ($report.version -cne $env:RELEASE_VERSION -or $report.commit -cne $env:GITHUB_SHA -or
               !$report.ctest.passed -or !$report.dllLoad.passed -or !$report.installer.passed -or
-              $report.ctest.count -lt 17 -or $report.installer.count -lt 31 -or
+              $report.ctest.count -lt 18 -or $report.installer.count -lt 31 -or
               @($report.files).Count -ne $expected.Count) { throw 'Invalid release validation report.' }
           $actualNames = @(Get-ChildItem -LiteralPath release-assets -File | Select-Object -ExpandProperty Name)
           if (@(Compare-Object ($expected + $reportName) $actualNames).Count -ne 0) {

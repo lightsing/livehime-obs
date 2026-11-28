@@ -129,7 +129,14 @@ void uncertainStart()
     signIn(controller);
     nextStartError = ApiError{ApiError::Kind::Timeout, QStringLiteral("Synthetic timeout")};
     nextStartError->outcomeUnknown = true;
+    QList<PluginIssue> startIssues;
+    QObject::connect(&controller, &LiveController::problem, &controller, [&startIssues](const PluginIssue &issue) {
+        if (issue.operation == QStringLiteral("开播") || issue.operation == QStringLiteral("直播状态"))
+            startIssues.append(issue);
+    });
     start(controller);
+    check(startIssues.size() == 1 && startIssues.first().codes.value("outcome_unknown").toBool()
+          && startIssues.first().exportReason.isEmpty(), "start timeout reports one structured failure");
     check(controller.state() == LiveController::State::Uncertain && controller.hasRemoteSession(), "start timeout retains remote ownership");
     check(!events.contains(QStringLiteral("obs.start")) && !controller.hasStreamCredentials(), "uncertain start never invents credentials");
     controller.start(QStringLiteral("Again"), {}, 1);

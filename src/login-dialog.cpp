@@ -307,10 +307,16 @@ void LoginDialog::configureBrowser()
                 if (!guard || guard->impl_->closed)
                     return S_OK;
                 BOOL success = FALSE;
-                if (SUCCEEDED(args->get_IsSuccess(&success)) && !success)
-                    guard->impl_->status->setText(QStringLiteral("登录页面加载失败，请检查网络后点击“重新加载”。"));
-                else
+                if (SUCCEEDED(args->get_IsSuccess(&success)) && !success) {
+                    COREWEBVIEW2_WEB_ERROR_STATUS status{};
+                    if (SUCCEEDED(args->get_WebErrorStatus(&status)) && status == COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED)
+                        return S_OK;
+                    const auto detail = QStringLiteral("登录页面加载失败，请检查网络后点击“重新加载”。");
+                    guard->impl_->status->setText(detail);
+                    emit guard->loginFailed(detail);
+                } else {
                     guard->impl_->status->setText(QStringLiteral("请使用哔哩哔哩 App 扫码，并在手机上确认登录。"));
+                }
                 return S_OK;
             }).Get(), &impl_->navigationCompletedToken);
     registered = impl_->browser->add_WebMessageReceived(

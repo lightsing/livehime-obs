@@ -41,9 +41,9 @@ void showChatUserMenu(QWidget *view, RoomRealtime *room, qint64 uid, const QStri
                 QObject::connect(session, &RoomRealtime::stopped, pending, &QObject::deleteLater);
                 QObject::connect(session, &RoomRealtime::moderationFinished, pending, [=](bool ok, const QString &text) {
                     pending->deleteLater();
-                    if (!session || session->contextEpoch() != epoch || !view->isVisible())
+                    if (!ok || !session || session->contextEpoch() != epoch || !view->isVisible())
                         return;
-                    auto *feedback = new QMessageBox(ok ? QMessageBox::Information : QMessageBox::Warning,
+                    auto *feedback = new QMessageBox(QMessageBox::Information,
                         label, QStringLiteral("%1（UID %2）\n%3").arg(name, QString::number(uid), text),
                         QMessageBox::Ok, view);
                     feedback->setTextFormat(Qt::PlainText);

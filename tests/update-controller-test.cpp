@@ -168,6 +168,11 @@ int main(int argc, char **argv) {
         const bool betaBuild = QStringLiteral(LIVEHIME_OBS_VERSION).contains("-beta.");
         UpdateController controller(manualSettings, cache, helper);
         Controls ui(controller), second(controller);
+        int handoffFailures = 0;
+        QObject::connect(&controller, &UpdateController::updateFailed, [&handoffFailures](const QString &detail) {
+            if (detail.contains(QStringLiteral("更新助手"))) ++handoffFailures;
+        });
+        require(waitFor([&] { return handoffFailures == 1; }), "failed exit handoff is reported at next startup");
         auto *toggle = ui.panel->findChild<QCheckBox *>("betaUpdates");
         require(toggle && toggle->isChecked() == betaBuild, "initial channel matches installed build");
         require(bool(ui.panel->findChild<QPushButton *>("openDiagnostics")) == betaBuild, "diagnostic folder follows installed build");
@@ -176,6 +181,9 @@ int main(int argc, char **argv) {
         require(second.panel->findChild<QCheckBox *>("betaUpdates")->isChecked() == !betaBuild, "channel reflected in both views");
         UpdateController restarted(manualSettings, cache, helper);
         Controls restored(restarted);
+        QObject::connect(&restarted, &UpdateController::updateFailed, [&handoffFailures] { ++handoffFailures; });
+        QCoreApplication::processEvents();
+        require(handoffFailures == 1, "handoff alert is consumed once");
         require(restored.panel->findChild<QCheckBox *>("betaUpdates")->isChecked() == !betaBuild, "explicit channel survives restart");
     }
     qInstallMessageHandler(previousHandler);

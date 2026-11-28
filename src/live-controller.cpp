@@ -48,7 +48,7 @@ LiveController::LiveController(QString storageDirectory, QObject *parent)
 }
 LiveController::~LiveController() = default;
 
-void LiveController::setState(State state, const QString &message)
+void LiveController::setState(State state, const QString &message, bool reportRecovery)
 {
 #if LIVEHIME_BETA_BUILD
     if (state_ != state) {
@@ -58,6 +58,8 @@ void LiveController::setState(State state, const QString &message)
 #endif
     state_ = state;
     status_ = message;
+    if (reportRecovery && (state == State::Recoverable || state == State::Uncertain))
+        emit problem({QStringLiteral("直播状态"), message, {{"state", int(state)}}});
     emit changed();
 }
 
@@ -67,6 +69,7 @@ void LiveController::persistCookies()
     QString error;
     if (!store_.saveCookies(client_->cookies(), &error)) {
         status_ = QStringLiteral("当前登录可用，但无法保存会话：") + error;
+        emit problem({QStringLiteral("保存登录状态"), status_});
         emit changed();
     }
 }
@@ -74,8 +77,13 @@ void LiveController::persistCookies()
 void LiveController::initialize()
 {
     QString error;
+    if (deviceId_.isEmpty()) emit problem({QStringLiteral("初始化登录"), status_});
     auto cookies = store_.loadCookies(&error);
-    if (!error.isEmpty()) { status_ = error + QStringLiteral(" 请重新扫码登录。"); emit changed(); }
+    if (!error.isEmpty()) {
+        status_ = error + QStringLiteral(" 请重新扫码登录。");
+        emit problem({QStringLiteral("读取登录状态"), status_});
+        emit changed();
+    }
     if (!cookies.isEmpty()) acceptCookies(cookies);
 }
 
@@ -98,11 +106,11 @@ void LiveController::validate()
     status_ = QStringLiteral("正在验证登录…"); emit changed();
     client_->validateSession([this, operation](Result<UserInfo> result) {
         if (operation != operation_) return;
-        if (auto *error = std::get_if<ApiError>(&result)) { fail(*error, State::SignedOut); return; }
+        if (auto *error = std::get_if<ApiError>(&result)) { fail(*error, State::SignedOut, QStringLiteral("验证登录")); return; }
         const auto identity = std::get<UserInfo>(result);
         if (remoteRoomId_ && user_.uid && identity.uid != user_.uid) {
             client_->logout();
-            fail({ApiError::Kind::Authentication, QStringLiteral("还有未结束的直播，请重新登录原账号后下播。")}, State::Uncertain);
+            fail({ApiError::Kind::Authentication, QStringLiteral("还有未结束的直播，请重新登录原账号后下播。")}, State::Uncertain, QStringLiteral("验证登录"));
             return;
         }
         user_ = identity;
@@ -128,12 +136,13 @@ void LiveController::logout()
     user_ = {}; room_ = {}; session_.reset(); verificationUrl_ = {};
     QString error;
     store_.clear(&error);
+    if (!error.isEmpty()) emit problem({QStringLiteral("清除登录状态"), error});
     setState(State::SignedOut, error.isEmpty() ? QStringLiteral("已退出登录。") : error);
     emit roomChanged();
     emit coverChanged();
 }
 
-void LiveController::fail(const ApiError &error, State fallback)
+void LiveController::fail(const ApiError &error, State fallback, const QString &operation)
 {
     working_ = false;
     metadataRefreshing_ = false;
@@ -143,7 +152,8 @@ void LiveController::fail(const ApiError &error, State fallback)
     QString message = error.message;
     if (error.code) message += QStringLiteral("（代码 %1）").arg(error.code);
     if (error.outcomeUnknown) message += QStringLiteral(" 请求结果未确认，请刷新房间状态；不要重复开播。");
-    setState(remoteRoomId_ && fallback == State::SignedOut ? State::Uncertain : fallback, message);
+    emit problem(PluginIssue::api(operation, error, message));
+    setState(remoteRoomId_ && fallback == State::SignedOut ? State::Uncertain : fallback, message, false);
 }
 
 void LiveController::refresh()
@@ -172,7 +182,7 @@ void LiveController::loadRoom(std::function<void()> continuation)
             const bool backgroundRead = metadataRefreshing_;
             const auto fallback = backgroundRead ? (state_ == State::Preparing ? State::Ready : state_)
                                                  : (remoteRoomId_ ? State::Uncertain : State::Ready);
-            fail(*error, fallback);
+            fail(*error, fallback, QStringLiteral("读取直播间"));
             if (backgroundRead) pumpMetadata();
             return;
         }
@@ -231,7 +241,10 @@ void LiveController::loadAreas()
     client_->fetchAreas([this, request](Result<QList<AreaInfo>> result) {
         if (request != areasRequest_) return;
         areasLoading_ = false;
-        if (auto *error = std::get_if<ApiError>(&result)) areasError_ = error->message;
+        if (auto *error = std::get_if<ApiError>(&result)) {
+            areasError_ = error->message;
+            emit problem(PluginIssue::api(QStringLiteral("读取分区"), *error));
+        }
         else { areas_ = std::get<QList<AreaInfo>>(result); areasError_.clear(); }
         emit areasChanged();
     });
@@ -250,7 +263,10 @@ void LiveController::loadCurrentCover()
     client_->fetchCover(room_.coverUrl, [this, request](Result<QByteArray> result) {
         if (request != coverRequest_) return;
         coverLoading_ = false;
-        if (auto *error = std::get_if<ApiError>(&result)) coverError_ = error->message;
+        if (auto *error = std::get_if<ApiError>(&result)) {
+            coverError_ = error->message;
+            emit problem(PluginIssue::api(QStringLiteral("读取封面"), *error));
+        }
         else coverBytes_ = std::get<QByteArray>(result);
         emit coverChanged();
     });
@@ -372,6 +388,7 @@ void LiveController::metadataFailed(const ApiError &error, MetadataKind kind, qu
     metadataKind_ = MetadataKind::None;
     activeMetadataValue_.clear();
     if (state_ == State::Preparing) state_ = State::Ready;
+    emit problem(PluginIssue::api(kind == MetadataKind::Title ? QStringLiteral("同步标题") : QStringLiteral("上传封面"), error, status_));
     notifyMetadata();
     // A newer explicitly entered draft / confirmed crop remains queued, but
     // the failed revision itself is not retried automatically.
@@ -488,7 +505,12 @@ void LiveController::beginQueuedStart()
             return;
         }
         const int areaId = *pendingStartArea_;
-        if (!room_.canLive) { pendingStartArea_.reset(); setState(State::Ready, room_.blockMessage); return; }
+        if (!room_.canLive) {
+            pendingStartArea_.reset();
+            emit problem({QStringLiteral("开播"), room_.blockMessage});
+            setState(State::Ready, room_.blockMessage);
+            return;
+        }
         if (room_.liveStatus == 1) {
             pendingStartArea_.reset();
             remoteRoomId_ = room_.roomId;
@@ -507,7 +529,7 @@ void LiveController::beginQueuedStart()
             if (auto *error = std::get_if<ApiError>(&result)) {
                 if (error->outcomeUnknown || error->kind == ApiError::Kind::UnsupportedProtocol || error->kind == ApiError::Kind::InvalidResponse)
                     remoteRoomId_ = room_.roomId;
-                fail(*error, remoteRoomId_ ? State::Uncertain : State::Ready); return;
+                fail(*error, remoteRoomId_ ? State::Uncertain : State::Ready, QStringLiteral("开播")); return;
             }
             session_ = std::get<LiveSession>(result);
             remoteRoomId_ = session_->roomId;
@@ -576,7 +598,7 @@ void LiveController::stopRemote()
         if (operation != operation_) return;
         stoppingRequest_ = false;
         working_ = false;
-        if (auto *error = std::get_if<ApiError>(&result)) { fail(*error, State::Uncertain); return; }
+        if (auto *error = std::get_if<ApiError>(&result)) { fail(*error, State::Uncertain, QStringLiteral("下播")); return; }
         remoteRoomId_ = 0;
         session_.reset();
         room_.liveStatus = 0;

@@ -61,6 +61,7 @@ void PluginUpdater::setState(State state, const QString &status) {
 #endif
     state_ = state;
     status_ = status;
+    if (state == State::Error) emit updateFailed(status);
     emit changed();
 }
 QNetworkReply *PluginUpdater::get(const QNetworkRequest &request) { return network_.get(request); }
@@ -225,7 +226,9 @@ void PluginUpdater::downloadFailed(int index, const QString &error) {
         tryDownload(index + 1);
         return;
     }
-    setState(State::Available, error + QStringLiteral("，可重新下载"));
+    const auto detail = error + QStringLiteral("，可重新下载");
+    emit updateFailed(detail);
+    setState(State::Available, detail);
 }
 void PluginUpdater::verify(QByteArray archive, int index) {
     auto result = std::make_shared<update::CachedInstaller>();

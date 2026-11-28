@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(livehime-obs VERSION 0.4.7 LANGUAGES C CXX)
+project(livehime-obs VERSION 0.4.8 LANGUAGES C CXX)
 
 set(LIVEHIME_BETA_NUMBER "" CACHE STRING "Numeric beta identifier (empty for a stable build)")
 set(release_version "${PROJECT_VERSION}")
@@ -54,7 +54,14 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/session-store-tes
   set_tests_properties(session-store-roundtrip PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit")
 endif()
+set(minizip_dir "${GOIM_DEPS}/zlib-1.4/contrib/minizip")
+add_library(diagnostic-zip STATIC "${minizip_dir}/zip.c" "${minizip_dir}/ioapi.c" "${minizip_dir}/iowin32.c")
+target_include_directories(diagnostic-zip PUBLIC "${minizip_dir}")
+target_link_libraries(diagnostic-zip PUBLIC zlibstatic)
+target_compile_definitions(diagnostic-zip PRIVATE NOCRYPT)
+set_target_properties(diagnostic-zip PROPERTIES AUTOMOC OFF)
 add_library(livehime-obs MODULE ${plugin_sources})
+target_link_libraries(livehime-obs PRIVATE diagnostic-zip)
 target_include_directories(livehime-obs PRIVATE src "${WEBVIEW2_ROOT}/build/native/include")
 target_link_libraries(livehime-obs PRIVATE OBS::libobs OBS::frontend-api
   zlibstatic brotlidec brotlicommon
@@ -184,9 +191,17 @@ if(BUILD_TESTING)
   target_link_libraries(diagnostics-test PRIVATE Qt6::Core)
   target_compile_definitions(diagnostics-test PRIVATE LIVEHIME_OBS_VERSION="${release_version}" LIVEHIME_BETA_BUILD=${beta_build})
   add_test(NAME release-diagnostics COMMAND diagnostics-test)
+  add_executable(error-reports-test tests/error-reports-test.cpp src/error-reports.cpp src/error-reports.hpp
+    src/diagnostic-archive.cpp src/beta-diagnostics.cpp)
+  target_include_directories(error-reports-test PRIVATE src)
+  target_link_libraries(error-reports-test PRIVATE Qt6::Core Qt6::Widgets Qt6::Network diagnostic-zip)
+  target_compile_definitions(error-reports-test PRIVATE LIVEHIME_OBS_VERSION="${release_version}"
+    LIVEHIME_BETA_BUILD=${beta_build} NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(error-reports-test PRIVATE /W4 /utf-8 /permissive- /EHsc)
+  add_test(NAME error-popup-and-zip COMMAND error-reports-test)
   set_tests_properties(release-diagnostics PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit")
   add_test(NAME update-preferences COMMAND update-controller-test)
-  set_tests_properties(update-preferences PROPERTIES TIMEOUT 30
+  set_tests_properties(update-preferences error-popup-and-zip PROPERTIES TIMEOUT 30
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${OBS_ROOT}/bin/64bit"
     ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QPA_PLATFORM_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins/platforms;QT_PLUGIN_PATH=${LIVEHIME_DEPS_ROOT}/qt6-2026-10-23/plugins")
   foreach(target IN ITEMS npm-signature-test plugin-updater-test update-controller-test)

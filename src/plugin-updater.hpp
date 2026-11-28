@@ -24,6 +24,7 @@ class PluginUpdater : public QObject {
     QByteArray installerSha256() const { return installer_.sha256; }
   signals:
     void changed();
+    void updateFailed(const QString &detail);
 
   protected:
     virtual QNetworkReply *get(const QNetworkRequest &request);

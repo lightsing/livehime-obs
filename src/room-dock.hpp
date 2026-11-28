@@ -26,6 +26,7 @@ class RoomDock final : public QWidget {
     void addUpdateControls(QWidget *controls);
   signals:
     void openRealtimeWindow(int kind);
+    void problem(const PluginIssue &issue);
     void unlockRealtimeInteraction();
 
   private:
@@ -37,6 +38,7 @@ class RoomDock final : public QWidget {
     void updateRoom();
     void login();
     void selectCover();
+    void coverProblem(const QString &detail);
     void updateAreas();
     void updateChildAreas(int selection = 0);
     void updateCover();

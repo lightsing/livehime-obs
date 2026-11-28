@@ -62,6 +62,7 @@ class RoomRealtime final : public QObject {
     const QList<RoomEntry> &entryHistory() const { return entryHistory_; }
   signals:
     void events(const QJsonArray &batch);
+    void problem(const PluginIssue &issue);
     void entryHistoryChanged();
     void moderationNotice(const ModerationNotice &notice);
     void contextChanged();

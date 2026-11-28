@@ -12,6 +12,7 @@ class UpdateController final : public QObject {
     void onObsExit();
   signals:
     void changed();
+    void updateFailed(const QString &detail);
   private:
     void check();
     void onUpdateChanged();

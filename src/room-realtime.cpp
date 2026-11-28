@@ -32,7 +32,10 @@ RoomRealtime::RoomRealtime(LiveController *controller, QObject *parent)
                 switch (phase) {
                 case GoimClient::Progress::Connecting: connecting(detail); break;
                 case GoimClient::Progress::Connected: setConnection(RealtimeConnection::Phase::Connected, detail); break;
-                case GoimClient::Progress::Waiting: retryConnection(detail, retryAt); break;
+                case GoimClient::Progress::Waiting:
+                    emit problem(PluginIssue::local(QStringLiteral("连接弹幕"), detail));
+                    retryConnection(detail, retryAt);
+                    break;
                 }
             });
     connect(goim_, &GoimClient::tokenRefreshRequested, this, [this] {
@@ -242,6 +245,7 @@ void RoomRealtime::fetchConfig() {
             configReply_.clear();
             if (const auto *error = std::get_if<ApiError>(&result)) {
                 retryTimer_.start();
+                emit problem(PluginIssue::api(QStringLiteral("连接弹幕"), *error));
                 retryConnection(failure(*error), QDeadlineTimer(retryTimer_.remainingTime(), Qt::PreciseTimer));
                 return;
             }
@@ -268,7 +272,9 @@ void RoomRealtime::connectEndpoint() {
         return;
     if (endpointIndex_ >= endpoints_.size() || connectionToken_.isEmpty()) {
         retryTimer_.start();
-        retryConnection(QStringLiteral("弹幕地址暂不可用，稍后重新获取连接配置"),
+        const auto detail = QStringLiteral("弹幕地址暂不可用，稍后重新获取连接配置");
+        emit problem(PluginIssue::local(QStringLiteral("连接弹幕"), detail));
+        retryConnection(detail,
                         QDeadlineTimer(retryTimer_.remainingTime(), Qt::PreciseTimer));
         return;
     }
@@ -296,6 +302,7 @@ void RoomRealtime::sendDanmaku(const QString &text) {
         if (const auto *error = std::get_if<ApiError>(&result)) {
             const auto message = error->outcomeUnknown
                 ? QStringLiteral("发送结果未确认，请先查看弹幕记录。") : failure(*error);
+            emit self->problem(PluginIssue::api(QStringLiteral("发送弹幕"), *error, message));
             emit self->danmakuSendFinished(false, message);
         } else {
             emit self->danmakuSendFinished(true, QStringLiteral("已发送"));
@@ -308,11 +315,15 @@ void RoomRealtime::moderateUser(UserModeration action, qint64 targetUid, quint64
                                 int durationHours) {
     if (moderating_) return;
     if (!controller_ || expectedEpoch != contextEpoch_ || !canModerate(targetUid)) {
-        emit moderationFinished(false, QStringLiteral("请选择当前直播间中身份明确的其他用户。"));
+        const auto detail = QStringLiteral("请选择当前直播间中身份明确的其他用户。");
+        emit problem(PluginIssue::local(QStringLiteral("房间管理"), detail));
+        emit moderationFinished(false, detail);
         return;
     }
     if (action == UserModeration::Mute && !protocol::validMuteDuration(durationHours)) {
-        emit moderationFinished(false, QStringLiteral("请选择有效的禁言时长。"));
+        const auto detail = QStringLiteral("请选择有效的禁言时长。");
+        emit problem(PluginIssue::local(QStringLiteral("房间管理"), detail));
+        emit moderationFinished(false, detail);
         return;
     }
     moderating_ = true;
@@ -323,8 +334,10 @@ void RoomRealtime::moderateUser(UserModeration action, qint64 targetUid, quint64
             self->moderating_ = false;
             self->moderationReply_.clear();
             if (const auto *error = std::get_if<ApiError>(&result)) {
-                emit self->moderationFinished(false, error->outcomeUnknown
-                    ? QStringLiteral("操作结果未确认，请先在直播间管理中核实。") : failure(*error));
+                const auto detail = error->outcomeUnknown
+                    ? QStringLiteral("操作结果未确认，请先在直播间管理中核实。") : failure(*error);
+                emit self->problem(PluginIssue::api(QStringLiteral("房间管理"), *error, detail));
+                emit self->moderationFinished(false, detail);
             } else {
                 emit self->moderationFinished(true, QStringLiteral("操作成功"));
             }
@@ -380,11 +393,13 @@ void RoomRealtime::refreshAudience() {
             audienceReply_.clear();
             if (const auto *error = std::get_if<ApiError>(&result)) {
                 audienceStatus_ = failure(*error);
+                emit problem(PluginIssue::api(QStringLiteral("读取观众榜"), *error));
                 audienceLoadFailed_ = true;
             } else {
                 const auto data = std::get<QJsonObject>(result);
                 if (!data.value("item").isArray() && !data.value("item").isNull()) {
                     audienceStatus_ = QStringLiteral("榜单响应结构无效");
+                    emit problem(PluginIssue::local(QStringLiteral("读取观众榜"), audienceStatus_));
                     audienceLoadFailed_ = true;
                 } else {
                     audience_ = data;
@@ -440,15 +455,17 @@ void RoomRealtime::requestGuard(int page) {
             if (epoch != contextEpoch_ || request != guardEpoch_ || stopped_)
                 return;
             guardReply_.clear();
-            if (const auto *error = std::get_if<ApiError>(&result))
+            if (const auto *error = std::get_if<ApiError>(&result)) {
                 guardStatus_ = failure(*error);
-            else {
+                emit problem(PluginIssue::api(QStringLiteral("读取大航海"), *error));
+            } else {
                 const auto data = std::get<QJsonObject>(result);
                 const auto info = data.value("info").toObject();
                 if ((!data.value("list").isArray() && !data.value("list").isNull()) ||
-                    info.value("now").toInt() != page)
+                    info.value("now").toInt() != page) {
                     guardStatus_ = QStringLiteral("大航海分页响应结构无效");
-                else {
+                    emit problem(PluginIssue::local(QStringLiteral("读取大航海"), guardStatus_));
+                } else {
                     QJsonArray rows = page == 1 ? QJsonArray{} : guard_.value("rows").toArray();
                     if (info.value("now").toInt() == 1)
                         for (const auto &row : data.value("top3").toArray())

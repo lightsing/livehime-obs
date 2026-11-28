@@ -376,9 +376,16 @@ void RoomDock::login() {
     loginDialog_ = dialog;
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     connect(dialog, &LoginDialog::cookiesReady, controller_, &LiveController::acceptCookies);
-    connect(dialog, &LoginDialog::loginFailed, this,
-            [this](const QString &message) { status_->setText(message); });
+    connect(dialog, &LoginDialog::loginFailed, this, [this](const QString &message) {
+        status_->setText(message);
+        emit problem(PluginIssue::local(QStringLiteral("扫码登录"), message));
+    });
     dialog->open();
+}
+
+void RoomDock::coverProblem(const QString &detail) {
+    status_->setText(detail);
+    emit problem(PluginIssue::local(QStringLiteral("选择封面"), detail));
 }
 
 void RoomDock::selectCover() {
@@ -390,21 +397,21 @@ void RoomDock::selectCover() {
         return;
     const QFileInfo info(file);
     if (info.size() <= 0 || info.size() > 30 * 1024 * 1024) {
-        status_->setText(QStringLiteral("请选择小于 30 MB 的本地图片。"));
+        coverProblem(QStringLiteral("请选择小于 30 MB 的本地图片。"));
         return;
     }
     QImageReader reader(file);
     reader.setAutoTransform(true);
     const QSize size = reader.size();
     if (!size.isValid() || static_cast<qint64>(size.width()) * size.height() > 80000000) {
-        status_->setText(QStringLiteral("图片尺寸无效或超过 8000 万像素。"));
+        coverProblem(QStringLiteral("图片尺寸无效或超过 8000 万像素。"));
         return;
     }
     if (size.width() > 4096 || size.height() > 4096)
         reader.setScaledSize(size.scaled(4096, 4096, Qt::KeepAspectRatio));
     const QImage source = reader.read();
     if (source.isNull()) {
-        status_->setText(QStringLiteral("无法读取此图片。"));
+        coverProblem(QStringLiteral("无法读取此图片。"));
         return;
     }
     CoverCropDialog crop(source, this);
@@ -412,18 +419,18 @@ void RoomDock::selectCover() {
         return;
     if (!controller_->authenticated() || controller_->user().uid != account ||
         controller_->room().roomId != room) {
-        status_->setText(QStringLiteral("账号或直播间已变化，请重新选择封面。"));
+        coverProblem(QStringLiteral("账号或直播间已变化，请重新选择封面。"));
         return;
     }
     const QImage image = crop.croppedImage();
     if (!coverDirectory_.isValid() || image.isNull()) {
-        status_->setText(QStringLiteral("无法生成裁切后的封面，请重新选择。"));
+        coverProblem(QStringLiteral("无法生成裁切后的封面，请重新选择。"));
         return;
     }
     const QString path =
         coverDirectory_.filePath(QUuid::createUuid().toString(QUuid::Id128) + QStringLiteral(".png"));
     if (!image.save(path, "PNG")) {
-        status_->setText(QStringLiteral("无法保存裁切图片，请检查临时目录。"));
+        coverProblem(QStringLiteral("无法保存裁切图片，请检查临时目录。"));
         return;
     }
     controller_->saveCover(path);
