@@ -136,11 +136,7 @@ void obs_module_post_load(void) {
             break;
         }
         realtimeDocks[i]->setAllowedAreas(Qt::AllDockWidgetAreas);
-        if (i == FloatingWindows::GiftDock) {
-            realtimeDocks[i]->resize(380, 320);
-        } else {
-            realtimeDocks[i]->resize(i == 0 ? 420 : 370, 580);
-        }
+        realtimeDocks[i]->resize(i == 0 ? 420 : 370, 580);
         if (!storage.isEmpty()) {
             QSettings settings(QDir(storage).filePath("floating-windows.ini"), QSettings::IniFormat);
             if (!settings.value("nativeDocks", false).toBool())

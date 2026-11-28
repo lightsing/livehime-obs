@@ -1,6 +1,8 @@
 #include "display-asset-cache.hpp"
 #include <QBuffer>
 #include <QImageReader>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QNetworkReply>
 #include <QTimer>
 #include <memory>
@@ -39,6 +41,38 @@ QPixmap decodePreview(QByteArray &bytes, const QByteArray &mime, bool emote) {
 } // namespace
 
 DisplayAssetCache::DisplayAssetCache(QObject *p) : QObject(p) {}
+QString DisplayAssetCache::giftImageUrl(qint64 giftId, const QJsonObject &material) {
+    for (const auto *field : {"img_basic", "webp", "gif"}) {
+        const auto url = emoteUrl(material.value(field).toString());
+        if (!url.isEmpty())
+            return url;
+    }
+    if (giftId <= 0 || giftImages_.contains(giftId) || !nextCatalogRequest_.hasExpired())
+        return giftImages_.value(giftId);
+    // Older SEND_GIFT events can carry only an ID. Resolve them from one shared public catalog.
+    nextCatalogRequest_ = QDeadlineTimer::Forever;
+    download(QUrl(QStringLiteral("https://api.live.bilibili.com/xlive/web-room/v1/giftPanel/giftConfig?platform=pc&room_id=0")),
+             8 * 1024 * 1024, [this](QByteArray bytes, QByteArray) {
+        const auto root = QJsonDocument::fromJson(bytes).object();
+        const auto list = root.value("data").toObject().value("list").toArray();
+        if (root.value("code").toInt(-1) != 0 || list.isEmpty()) {
+            nextCatalogRequest_ = QDeadlineTimer(60000);
+            return;
+        }
+        QHash<qint64, QString> images;
+        for (const auto &entry : list) {
+            const auto item = entry.toObject();
+            const auto id = item.value("id").toInteger();
+            const auto url = emoteUrl(item.value("img_basic").toString());
+            if (id > 0 && !url.isEmpty())
+                images.insert(id, url);
+        }
+        giftImages_.swap(images);
+        nextCatalogRequest_ = QDeadlineTimer(3600000);
+        emit giftCatalogReady();
+    });
+    return {};
+}
 QPixmap DisplayAssetCache::get(const QString &url) {
     if (auto p = avatars_.object(url))
         return *p;
@@ -117,47 +151,52 @@ void DisplayAssetCache::pump() {
         const auto key = pending_.dequeue();
         const bool emote = key.second == Usage::Emote;
         const qint64 limit = emote ? 4 * 1024 * 1024 : 1024 * 1024;
-        QNetworkRequest request{QUrl(key.first)};
-        request.setAttribute(QNetworkRequest::AuthenticationReuseAttribute, QNetworkRequest::Manual);
-        request.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
-        request.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
-        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
-        request.setTransferTimeout(8000);
-        auto reply = network_.get(request);
-        reply->setReadBufferSize(limit + 1);
-        QTimer::singleShot(15000, reply, [reply] { if (reply->isRunning()) reply->abort(); });
         ++active_;
-        auto bytes = std::make_shared<QByteArray>();
-        auto readAvailable = [reply, bytes, limit] {
-            const auto count = qMin<qint64>(reply->bytesAvailable(), limit + 1 - bytes->size());
-            if (count > 0)
-                bytes->append(reply->read(count));
-        };
-        connect(reply, &QIODevice::readyRead, this, [reply, bytes, limit, readAvailable] {
-            readAvailable();
-            if (bytes->size() > limit)
-                reply->abort();
-        });
-        connect(reply, &QNetworkReply::metaDataChanged, this, [reply, limit] {
-            if (reply->header(QNetworkRequest::ContentLengthHeader).toLongLong() > limit)
-                reply->abort();
-        });
-        connect(reply, &QNetworkReply::finished, this, [this, reply, bytes, limit, key, emote, readAvailable] {
-            readAvailable();
-            QPixmap preview;
-            if (reply->error() == QNetworkReply::NoError &&
-                reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200 && bytes->size() <= limit) {
-                const auto mime = reply->rawHeader("Content-Type").split(';').value(0).trimmed().toLower();
-                preview = decodePreview(*bytes, mime, emote);
-            }
+        download(QUrl(key.first), limit, [this, key, emote](QByteArray bytes, QByteArray mime) {
+            const auto preview = decodePreview(bytes, mime, emote);
             if (preview.isNull())
                 failures_.insert(key, new QDeadlineTimer(30000));
             requested_.remove(key);
-            reply->deleteLater();
             --active_;
             pump();
             storePreview(key.first, key.second, preview);
         });
     }
+}
+void DisplayAssetCache::download(const QUrl &url, qint64 limit, std::function<void(QByteArray, QByteArray)> finished) {
+    QNetworkRequest request{url};
+    request.setAttribute(QNetworkRequest::AuthenticationReuseAttribute, QNetworkRequest::Manual);
+    request.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
+    request.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+    request.setTransferTimeout(8000);
+    auto reply = network_.get(request);
+    reply->setReadBufferSize(limit + 1);
+    QTimer::singleShot(15000, reply, [reply] { if (reply->isRunning()) reply->abort(); });
+    auto bytes = std::make_shared<QByteArray>();
+    auto readAvailable = [reply, bytes, limit] {
+        const auto count = qMin<qint64>(reply->bytesAvailable(), limit + 1 - bytes->size());
+        if (count > 0)
+            bytes->append(reply->read(count));
+    };
+    connect(reply, &QIODevice::readyRead, this, [reply, bytes, limit, readAvailable] {
+        readAvailable();
+        if (bytes->size() > limit)
+            reply->abort();
+    });
+    connect(reply, &QNetworkReply::metaDataChanged, this, [reply, limit] {
+        if (reply->header(QNetworkRequest::ContentLengthHeader).toLongLong() > limit)
+            reply->abort();
+    });
+    connect(reply, &QNetworkReply::finished, this, [reply, bytes, limit, readAvailable, finished = std::move(finished)] {
+        readAvailable();
+        reply->deleteLater();
+        if (reply->error() == QNetworkReply::NoError &&
+            reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200 && bytes->size() <= limit) {
+            const auto mime = reply->rawHeader("Content-Type").split(';').value(0).trimmed().toLower();
+            finished(std::move(*bytes), mime);
+        } else
+            finished({}, {});
+    });
 }
 } // namespace livehime

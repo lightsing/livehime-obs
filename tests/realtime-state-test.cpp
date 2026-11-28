@@ -188,6 +188,18 @@ int main(int argc, char **argv) {
     const auto hiddenWealth = roomInteraction(v2("COoFKAEwyAOoAQGyAQcI6gUiAggl"), 456);
     const auto mixedIdentity = roomInteraction(v2("CN4BKAEwyAOyAQcI6gUiAggM"), 456);
     const auto emptyWealth = roomInteraction(v2("KAEwyAOyAQUI6gUiAA=="), 456);
+    // InteractWord's legacy FansMedalInfo and user_dagw.Medal have distinct field numbering.
+    const auto styledEntry = roomInteraction(v2("KAEwyANKBxAIGgNvbGSSAQR0YWlssgErCAwSEgoHUHJpdmF0ZUIHI2RkYTE1NRoTCgZIZWFsbGkQEHoHIzg5NTE2Zg=="), 456);
+    const auto styledHidden = roomInteraction(v2("KAEwyAOSAQR0YWlsqAEBsgErCAwSEgoHUHJpdmF0ZUIHI2RkYTE1NRoTCgZIZWFsbGkQEHoHIzg5NTE2Zg=="), 456);
+    const auto legacyBadge = roomInteraction(v2("KAEwyANKDBAIGgNvbGQozKupBaIBBxIFZ3JvdXA="), 456);
+    const QJsonObject modernMedal{{"medal_name", "Healli"}, {"medal_level", 16}, {"medal_color_start", 0x89516f}};
+    check(styledEntry && styledEntry->value("fans_medal").toObject() == modernMedal &&
+          styledEntry->value("tail_text") == "tail" && styledEntry->value("uname_color") == "#dda155" &&
+          legacyBadge && legacyBadge->value("fans_medal").toObject().value("medal_name") == "old" &&
+          legacyBadge->value("tail_text") == "group", "modern and legacy entry presentation is read from the wire");
+    check(styledHidden && !styledHidden->contains("fans_medal") && !styledHidden->contains("tail_text") &&
+          !styledHidden->contains("uname_color") && !styledHidden->contains("uid") &&
+          !QJsonDocument(*styledHidden).toJson().contains("Private"), "masked entry cannot leak identity or identifying labels");
     check(wealthEntry && wealthEntry->value("wealth_level").toInteger() == 37 && wealthEntry->value("uid").toInteger() == 746 &&
           hiddenWealth && !hiddenWealth->contains("wealth_level") && !hiddenWealth->contains("uid") &&
           mixedIdentity && !mixedIdentity->contains("uid") && emptyWealth && !emptyWealth->contains("wealth_level"),
@@ -199,6 +211,11 @@ int main(int argc, char **argv) {
     QJsonArray delivered;
     QObject::connect(&service, &RoomRealtime::events, [&](const QJsonArray &batch) { delivered = batch; });
     auto firstEntry = legacy(1, 456, "first");
+    auto firstData = firstEntry.value("data").toObject();
+    firstData.insert("fans_medal", modernMedal);
+    firstData.insert("tail_text", "badge");
+    firstData.insert("uname_color", "#fbc165");
+    firstEntry.insert("data", firstData);
     firstEntry.insert("msg_id", "offline-entry");
     transport->events({firstEntry, firstEntry, legacy(2, 456, "follow"), legacy(3, 456, "share"),
         legacy(1, 999, "wrong room"), v2("EgZsZWdhY3koATDIAziA4s+qBrIBDRILCglzeW50aGV0aWM="),
@@ -208,6 +225,8 @@ int main(int argc, char **argv) {
           service.entryHistory().first().timestamp > 0 && service.entryHistory().last().name == "synthetic" &&
           service.entryHistory().last().timestamp == 1700000000 && delivered.size() == 5,
           "hidden room collects both entry formats, keeps other interactions live and drops wrong-room or malformed events");
+    check(service.entryHistory().first().medal == modernMedal && service.entryHistory().first().tailText == "badge" &&
+          service.entryHistory().first().nameColor == "#fbc165", "entry history retains the same medal, name color and trailing label as the live entry");
     transport->events({v2("EgZsZWdhY3koATDIAziA4s+qBqgBAbIBDRILCglzeW50aGV0aWM="),
         v2("EgZsZWdhY3koATDIAziA4s+qBrIBDxINCglzeW50aGV0aWMgAQ=="),
         v2("EgZsZWdhY3koATDIAziA4s+qBrIBERILCglzeW50aGV0aWNKAigB")});

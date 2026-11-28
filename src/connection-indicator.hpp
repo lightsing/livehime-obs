@@ -6,6 +6,7 @@ namespace livehime {
 class ConnectionIndicator final : public QLabel {
   public:
     explicit ConnectionIndicator(RoomRealtime *service, QWidget *parent = nullptr);
+    void refreshColors();
   protected:
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;

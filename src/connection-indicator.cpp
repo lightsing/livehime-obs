@@ -1,4 +1,5 @@
 #include "connection-indicator.hpp"
+#include "panel-palette.hpp"
 #include <QVariant>
 
 namespace livehime {
@@ -20,24 +21,34 @@ ConnectionIndicator::ConnectionIndicator(RoomRealtime *service, QWidget *parent)
 void ConnectionIndicator::display(const RealtimeConnection &connection) {
     using Phase = RealtimeConnection::Phase;
     connection_ = connection;
-    QString state, style;
+    QString state;
     switch (connection.phase) {
     case Phase::Idle: state = QStringLiteral("idle"); break;
     case Phase::Connecting: state = QStringLiteral("connecting"); break;
     case Phase::Connected:
         state = QStringLiteral("connected");
-        style = QStringLiteral("background-color:#21563b;color:white;padding:3px 6px;border-radius:3px;");
         break;
     case Phase::Reconnecting:
         state = QStringLiteral("reconnecting");
-        style = QStringLiteral("background-color:#a32634;color:white;font-weight:bold;padding:4px 6px;border-radius:3px;");
         break;
     }
     setProperty("connectionState", state);
-    if (styleSheet() != style)
-        setStyleSheet(style);
+    refreshColors();
     setToolTip(QStringLiteral("<qt>") + connection.detail.toHtmlEscaped() + QStringLiteral("</qt>"));
     updateText();
+}
+void ConnectionIndicator::refreshColors() {
+    using Phase = RealtimeConnection::Phase;
+    const auto &c = PanelPalette::current();
+    const bool warning = connection_.phase == Phase::Reconnecting;
+    QString style;
+    if (warning || connection_.phase == Phase::Connected) {
+        const auto fill = warning ? c.retrying : c.connected;
+        style = QStringLiteral("background-color:%1;color:%2;padding:3px 6px;border-radius:3px;font-weight:%3;")
+            .arg(fill.name(), c.badgeText(fill).name(), warning ? QStringLiteral("bold") : QStringLiteral("normal"));
+    }
+    if (styleSheet() != style)
+        setStyleSheet(style);
 }
 void ConnectionIndicator::updateText() {
     countdown_.stop();

@@ -83,6 +83,10 @@ RoomRealtime::RoomRealtime(LiveController *controller, QObject *parent)
                     auto &entry = entryHistory_.last();
                     entry.uid = data->value("uid").toInteger();
                     entry.glory = data->value("wealth_level").toInteger();
+                    entry.medal = data->value("fans_medal").toObject();
+                    entry.nameColor = data->value("uname_color").toString();
+                    entry.tailText = data->value("tail_text").toString();
+                    entry.anonymous = data->value("is_mystery").toBool();
                     entriesChanged = true;
                 }
                 displayEvents.append(QJsonObject{{"cmd", "INTERACT_WORD"}, {"data", *data}});
@@ -211,6 +215,7 @@ void RoomRealtime::syncContext() {
     audienceDirty_ = guardDirty_ = false;
     audienceNextAt_ = guardNextAt_ = 0;
     audienceStatus_.clear();
+    audienceLoadFailed_ = false;
     guardStatus_.clear();
     emit contextChanged();
     emit audienceChanged();
@@ -349,6 +354,7 @@ void RoomRealtime::selectAudience(const QString &type, const QString &sort) {
     audienceSort_ = sort;
     audience_ = {};
     audienceStatus_.clear();
+    audienceLoadFailed_ = false;
     emit audienceChanged();
     refreshAudience();
 }
@@ -364,6 +370,7 @@ void RoomRealtime::refreshAudience() {
     audienceNextAt_ = audienceRequestedAt_ + 10000 + QRandomGenerator::global()->bounded(10001);
     const auto epoch = contextEpoch_, request = ++audienceEpoch_;
     audienceStatus_ = QStringLiteral("加载中…");
+    audienceLoadFailed_ = false;
     emit audienceChanged();
     audienceReply_ = controller_->client()->fetchRealtime(
         protocol::contributionRank(uid_, roomId_, audienceType_, audienceSort_, now()),
@@ -371,13 +378,15 @@ void RoomRealtime::refreshAudience() {
             if (epoch != contextEpoch_ || request != audienceEpoch_ || stopped_)
                 return;
             audienceReply_.clear();
-            if (const auto *error = std::get_if<ApiError>(&result))
+            if (const auto *error = std::get_if<ApiError>(&result)) {
                 audienceStatus_ = failure(*error);
-            else {
+                audienceLoadFailed_ = true;
+            } else {
                 const auto data = std::get<QJsonObject>(result);
-                if (!data.value("item").isArray() && !data.value("item").isNull())
+                if (!data.value("item").isArray() && !data.value("item").isNull()) {
                     audienceStatus_ = QStringLiteral("榜单响应结构无效");
-                else {
+                    audienceLoadFailed_ = true;
+                } else {
                     audience_ = data;
                     audienceStatus_ = QStringLiteral("%1 · %2 条")
                                           .arg(QDateTime::currentDateTime().toString("HH:mm:ss"))

@@ -18,16 +18,24 @@ struct DisplaySender {
     int nameOffset = 0;
     QString message;
 };
+struct ChatSpan {
+    enum Kind { Glory, Medal, Nickname, GiftAction, GiftName, EntryName, EntryLabel, EntryTime };
+    Kind kind;
+    int start, length;
+    QString badgeText;
+    QColor badgeColor;
+};
 // Text stays available for tooltips and as a fallback while an emote is loading.
 class DisplayListModel final : public QAbstractListModel {
   public:
-    enum { HighlightDeadlineRole = Qt::UserRole + 1, EmotesRole, EmoteImagesRole, SenderRole, MessageSequenceRole };
+    enum { HighlightDeadlineRole = Qt::UserRole + 1, EmotesRole, EmoteImagesRole, SenderRole, MessageSequenceRole, ChatSpansRole };
     explicit DisplayListModel(int limit, QObject *parent = nullptr);
     int rowCount(const QModelIndex &parent = {}) const override;
     QVariant data(const QModelIndex &, int role = Qt::DisplayRole) const override;
     QVariantMap emoteImages(const QModelIndex &, bool requestMissing) const;
     void append(const QString &text, const QString &avatar = {}, qint64 highlightDeadline = 0,
-                QList<DanmakuEmote> emotes = {}, DisplaySender sender = {}, qint64 sequence = 0);
+                QList<DanmakuEmote> emotes = {}, DisplaySender sender = {}, qint64 sequence = 0,
+                QList<ChatSpan> spans = {});
     void setAssets(DisplayAssetCache *cache, bool showEmotes = false);
     void setAvatarsVisible(bool visible);
     void replace(const QStringList &rows);
@@ -41,6 +49,7 @@ class DisplayListModel final : public QAbstractListModel {
         QList<DanmakuEmote> emotes;
         DisplaySender sender;
         qint64 sequence = 0;
+        QList<ChatSpan> spans;
     };
     QList<Row> rows_;
     QPointer<DisplayAssetCache> assets_;
@@ -56,8 +65,7 @@ QList<RankChoice> audienceChoices(const QJsonObject &rankInfo);
 QString privateDisplayName(const QJsonObject &row);
 class FloatingWindows final : public QObject {
   public:
-    static constexpr int GiftDock = 3;
-    static constexpr int DockCount = 4;
+    static constexpr int DockCount = 3;
     FloatingWindows(RoomRealtime *, QString storageDirectory, QWidget *parent = nullptr,
                     std::array<QDockWidget *, DockCount> registeredDocks = {});
     ~FloatingWindows() override;

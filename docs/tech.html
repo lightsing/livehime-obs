@@ -25,7 +25,7 @@
       </nav>
       <div class="nav-actions">
         <a class="btn btn-ghost" href="https://github.com/lightsing/livehime-obs" target="_blank" rel="noopener">GitHub</a>
-        <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/tag/v0.4.4" target="_blank" rel="noopener">v0.4.4 发布页</a>
+        <a class="btn btn-primary" href="https://github.com/lightsing/livehime-obs/releases/tag/v0.4.5" target="_blank" rel="noopener">v0.4.5 发布页</a>
         <button class="nav-toggle" id="navToggle" type="button" aria-label="展开导航">菜单</button>
       </div>
     </div>
@@ -77,7 +77,7 @@
           <div class="step-card">
             <div class="step-num">04 · 实时与 TLS 隔离</div>
             <h3>Goim 单连接与私有后端</h3>
-            <p>直播互动、礼物流水、房间观众与大航海共用一条 Goim TCP 长连接（静态链接 zlib 1.4 / Brotli 1.2.1，支持 Protobuf V2 礼物与 4 类超管广播）。私有 <code>qschannelbackend.dll</code> 放于插件目录，不覆盖宿主 Qt。</p>
+            <p>直播互动、房间观众与大航海共用一条 Goim TCP 长连接（静态链接 zlib 1.4 / Brotli 1.2.1，支持 Protobuf V2 礼物与 4 类超管广播）。私有 <code>qschannelbackend.dll</code> 放于插件目录，不覆盖宿主 Qt。</p>
           </div>
         </div>
 
@@ -180,7 +180,7 @@ Set-Location livehime-obs
               </div>
               <pre id="techTestSnippet">.\scripts\build.ps1 -DependenciesRoot D:\path\to\deps -SkipBootstrap
 ctest --test-dir build -C RelWithDebInfo --output-on-failure
-.\scripts\test-installer.ps1 -InstallerPath dist\livehime-obs-0.4.4-windows-x64-setup.exe</pre>
+.\scripts\test-installer.ps1 -InstallerPath dist\livehime-obs-0.4.5-windows-x64-setup.exe</pre>
             </div>
           </div>
         </div>

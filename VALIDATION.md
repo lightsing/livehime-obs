@@ -4,6 +4,14 @@
 
 ---
 
+## 0.4.5 · 礼物弹幕合并、可调分栏与主题配色
+
+在 Windows x64 的 OBS Studio 33.0.1 中，使用模拟互动消息验证了礼物与弹幕混排、进场卡片和紧凑在线榜。载入含独立礼物栏的旧布局后，菜单只保留现有面板。拖动分隔线后重启 OBS，两栏高度恢复到拖动后的位置。
+
+在 OBS 自带的 Yami 深色和浅色主题下分别检查了互动窗口和在线榜。Qt 测试还覆盖了窗口打开时修改背景和强调色，以及礼物文字与气泡底色的对比度。正式安装包、安装升级测试和文件校验值见 [0.4.5 发布验证报告](https://github.com/lightsing/livehime-obs/releases/download/v0.4.5/livehime-obs-0.4.5-windows-x64-validation.json)。
+
+---
+
 ## 0.4.4 · 后台拖动与房间观众穿透
 
 Windows 原生浮窗回归覆盖 OBS 最小化、其他窗口遮挡、观众穿透与重新打开后的解锁。发布构建和安装器结果见 [CI 验证报告](https://github.com/lightsing/livehime-obs/releases/download/v0.4.4/livehime-obs-0.4.4-windows-x64-validation.json)。

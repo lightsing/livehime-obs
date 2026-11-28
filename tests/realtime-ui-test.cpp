@@ -1,6 +1,7 @@
 // Real presentation widgets with a main-thread, no-network realtime service double.
 #include "dock-focus.hpp"
 #include "display-asset-cache.hpp"
+#include "audience-rank.hpp"
 #include "floating-windows.hpp"
 #include "moderation-alerts.hpp"
 #include "room-realtime.hpp"
@@ -38,6 +39,8 @@
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QSplitter>
+#include <QTabBar>
 #include <QStandardItemModel>
 #include <QTemporaryDir>
 #include <QStyledItemDelegate>
@@ -57,6 +60,7 @@
 #include <iostream>
 
 namespace livehime {
+static QStringList fixtureRankFaces;
 static QList<RoomEntry> fixtureEntries = {{QStringLiteral("早到的观众"), 1700000000, {}, 1},
                                           {QStringLiteral("新到的观众"), 1700000001, {}, 2}};
 SessionStore::SessionStore(QString p) : directory_(std::move(p)) {}
@@ -73,15 +77,22 @@ RoomRealtime::RoomRealtime(LiveController *c, QObject *p) : QObject(p), controll
     connect(this, &RoomRealtime::danmakuSendFinished, this, [this] { sendingDanmaku_ = false; });
     connection_.detail = QStringLiteral("离线合成数据 · 布局验证");
     audienceStatus_ = guardStatus_ = QStringLiteral("离线合成数据");
-    audience_ = QJsonObject{
-        {"item",
-         QJsonArray{
-             QJsonObject{{"rank", 1},
-                         {"name", QStringLiteral("离线合成观众 · 测试昵称")},
-                         {"score", 246},
-                         {"guard_level", 3}},
-             QJsonObject{{"rank", 2}, {"name", "must never display"}, {"is_mystery", 1}, {"score", 120}}}},
-        {"config", QJsonObject{{"value_text", QStringLiteral("亲密度")}}}};
+    const QStringList viewers{QStringLiteral("听海的人"), QStringLiteral("青柠_Tsing"), QStringLiteral("小岛电台"),
+                              QStringLiteral("空明AvA"), QStringLiteral("暮色星宇"), QStringLiteral("白忆寒_DreamWalker"),
+                              QStringLiteral("晚星"), QStringLiteral("银河车站")};
+    QJsonArray ranks;
+    const int scores[]{1380, 30, 10, 6, 1, 1, 0, 0};
+    for (int i = 0; i < viewers.size(); ++i) {
+        const QJsonObject medal{{"name", "Healli"}, {"level", 30 - i},
+                                {"v2_medal_color_start", i < 3 ? "#327d95" : "#78576e"}};
+        QJsonObject uinfo{{"uid", i + 101}, {"base", QJsonObject{{"name", viewers[i]}, {"face", fixtureRankFaces.value(i)}}},
+                          {"wealth", QJsonObject{{"level", 42 - i}}}, {"medal", medal}};
+        if (i == viewers.size() - 1)
+            uinfo.insert("is_mystery", 1);
+        ranks.append(QJsonObject{{"rank", i + 1}, {"score", scores[i]}, {"uinfo", uinfo}});
+    }
+    audience_ = QJsonObject{{"count", viewers.size()}, {"item", ranks},
+                            {"config", QJsonObject{{"value_text", QStringLiteral("贡献值")}}}};
     guard_ = QJsonObject{
         {"rows",
          QJsonArray{QJsonObject{{"rank", 1},
@@ -135,7 +146,7 @@ static QWidget *window(int k) {
 }
 static std::array<QDockWidget *, FloatingWindows::DockCount> registerShells(QMainWindow &host) {
     std::array<QDockWidget *, FloatingWindows::DockCount> docks{};
-    const QStringList titles={QStringLiteral("直播互动"),QStringLiteral("房间观众"),QStringLiteral("大航海"),QStringLiteral("礼物流水")};
+    const QStringList titles={QStringLiteral("直播互动"),QStringLiteral("房间观众"),QStringLiteral("大航海")};
     for(int k=0;k<FloatingWindows::DockCount;++k){
         docks[k]=new QDockWidget(titles[k],&host);
         docks[k]->setObjectName(QString::fromLatin1(FloatingWindows::dockId(k)));
@@ -558,107 +569,234 @@ static void checkSettingsWheel(QWidget *panel) {
     toggle->click();
 }
 
-static void checkGiftDock(QMainWindow &host, FloatingWindows &windows, RoomRealtime &service) {
-    auto *interaction = windows.dockWidget(0);
-    auto *giftDock = windows.dockWidget(FloatingWindows::GiftDock);
-    auto *split = interaction->findChild<QPushButton *>("giftSplit");
-    auto *merge = giftDock->findChild<QPushButton *>("giftMerge");
-    auto *showGifts = interaction->findChild<QCheckBox *>("gifts");
-    QPointer<QListView> history = interaction->findChild<QListView *>("giftHistory");
-    check(split && merge && showGifts && history && !giftDock->isVisible(), "gift history starts merged and offers a split control");
-    if (!split || !merge || !showGifts || !history) return;
-    QPointer<QAbstractItemModel> model = history->model();
-    auto addGift = [&](const QString &name) {
-        service.events(QJsonArray{QJsonObject{{"cmd", "SEND_GIFT"},
-            {"data", QJsonObject{{"uname", "viewer"}, {"giftName", name}, {"coin_type", "gold"}, {"num", 1}}}}});
+static void checkOnlineRanking(LiveController &controller) {
+    QTemporaryDir dir;
+    QStringList avatars;
+    for (int i = 0; i < 8; ++i)
+        avatars.append(QStringLiteral("https://i0.hdslb.com/bfs/face/test-rank-%1.png").arg(i));
+    fixtureRankFaces = avatars;
+    RoomRealtime service(&controller);
+    fixtureRankFaces.clear();
+    FloatingWindows windows(&service, dir.path());
+    auto *cache = windows.findChild<DisplayAssetCache *>();
+    check(cache, "the panel owns its public display asset cache");
+    if (!cache) return;
+    const QColor colors[]{QColor("#ce824a"), QColor("#3c91b6"), QColor("#b07db8"), QColor("#637cb4")};
+    for (int i = 0; i < 8; ++i) {
+        QPixmap face(32, 32);
+        face.fill(colors[i % 4]);
+        QPainter p(&face);
+        p.setPen(Qt::NoPen);
+        p.setBrush(colors[i % 4].lighter(170));
+        p.drawEllipse(9, 5, 14, 14);
+        p.drawEllipse(4, 21, 24, 18);
+        p.end();
+        cache->storePreview(avatars.at(i), DisplayAssetCache::Usage::Avatar, face);
+    }
+    windows.showWindow(1);
+    auto *dock = windows.dockWidget(1);
+    dock->resize(283, 560);
+    service.audienceChanged();
+    settle();
+    auto *list = dock->findChild<QListView *>("audienceRanking");
+    auto *tabs = dock->findChild<QTabBar *>("audienceMaster");
+    auto *footer = dock->findChild<QLabel *>("audienceSummary");
+    const auto *model = list ? dynamic_cast<AudienceRankModel *>(list->model()) : nullptr;
+    check(model && model->rowCount() == 8 && tabs && tabs->count() == 5 && footer && footer->text().contains('8'),
+          "online audience uses a ranked list, category tabs and the returned viewer count");
+    if (tabs && tabs->count() == 5)
+        check(tabs->rect().contains(tabs->tabRect(0)) && tabs->rect().contains(tabs->tabRect(4)),
+              "all five default audience tabs fit at the reference dock width");
+    if (!model || model->rowCount() != 8) return;
+    const auto &first = model->row(0);
+    const auto &hidden = model->row(7);
+    check(first.name == QStringLiteral("听海的人") && first.rank == "1" && first.score == "1380" &&
+          first.glory == 42 && first.medal == "Healli 30" && !model->index(0).data(Qt::DecorationRole).value<QPixmap>().isNull(),
+          "first ranked viewer has avatar, wealth, fan badge and contribution score");
+    check(hidden.name == QStringLiteral("神秘用户") && hidden.face.isEmpty() && !hidden.glory && hidden.medal.isEmpty() &&
+          !hidden.sender.uid && model->complete(), "anonymous rank keeps only public rank and score");
+    const auto dirName = qEnvironmentVariable("LIVEHIME_UI_SCREENSHOTS");
+    if (!dirName.isEmpty()) {
+        QDir().mkpath(dirName);
+        dock->grab().save(dirName + "/online-ranking.png");
+    }
+}
+
+static void checkInteractionSplitter(LiveController &controller) {
+    QTemporaryDir dir;
+    RoomRealtime service(&controller);
+    QList<int> adjusted;
+    for (int launch = 0; launch < 2; ++launch) {
+        FloatingWindows windows(&service, dir.path());
+        windows.showWindow(0);
+        auto *dock = windows.dockWidget(0);
+        dock->resize(380, 630);
         settle();
+        auto *split = dock->findChild<QSplitter *>("interactionSplitter");
+        auto *input = dock->findChild<QWidget *>("danmakuInputRow");
+        auto *activity = dock->findChild<QCheckBox *>("anti");
+        check(split && split->count() == 2 && input && activity &&
+              split->widget(0)->objectName() == "messageHistory" && split->widget(1)->objectName() == "antiHistory",
+              "chat and entries occupy two panes with the composer beneath them");
+        if (!split || !input || !activity) return;
+        if (launch == 1) {
+            check(qAbs(split->sizes()[0] - adjusted.value(0)) <= 3, "the drag position survives a fresh panel instance");
+            break;
+        }
+        auto *handle = split->handle(1);
+        const auto before = split->sizes();
+        const QPoint inputStart = input->mapTo(dock, QPoint());
+        const QPoint start = handle->mapToGlobal(handle->rect().center());
+        const QPoint end = start - QPoint(0, 56);
+        auto mouse = [handle](QEvent::Type type, QPoint global, Qt::MouseButton button, Qt::MouseButtons down) {
+            QMouseEvent e(type, QPointF(handle->mapFromGlobal(global)), QPointF(global), button, down, Qt::NoModifier);
+            QApplication::sendEvent(handle, &e);
+        };
+        mouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+        mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+        settle();
+        adjusted = split->sizes();
+        check(adjusted[0] < before[0] - 35 && adjusted[1] > before[1] + 35 &&
+              input->mapTo(dock, QPoint()) == inputStart, "dragging resizes both panes while the composer stays put");
+        activity->setChecked(false);
+        settle();
+        check(!handle->isVisible() && split->sizes()[0] > adjusted[0], "hiding entries gives the space back to chat");
+        activity->setChecked(true);
+        settle();
+        check(handle->isVisible() && qAbs(split->sizes()[0] - adjusted[0]) <= 3, "showing entries restores the split");
+    }
+}
+
+static void checkThemeChanges(LiveController &controller) {
+    const auto original = QApplication::palette();
+    QTemporaryDir dir;
+    RoomRealtime room(&controller);
+    FloatingWindows windows(&room, dir.path());
+    windows.showWindow(0);
+    windows.showWindow(1);
+    auto *dock = windows.dockWidget(0);
+    dock->findChild<QPushButton *>("show-entry-history")->click();
+    auto *chat = dock->findChild<QListView *>("messageHistory");
+    auto *entries = dock->findChild<QListView *>("antiHistory");
+    auto *history = dock->findChild<QListView *>("entry-history-list");
+    auto *rank = windows.dockWidget(1)->findChild<QListView *>("audienceRanking");
+    room.events({QJsonObject{{"cmd", "SEND_GIFT"}, {"data", QJsonObject{{"uname", "viewer"}, {"giftName", "flower"}, {"num", 1}}}}});
+    settle();
+    QPersistentModelIndex gift(chat->model()->index(0, 0));
+    auto apply = [&](QColor window, QColor base, QColor ink, QColor primary) {
+        auto p = original;
+        p.setColor(QPalette::Window, window);
+        p.setColor(QPalette::Base, base);
+        p.setColor(QPalette::WindowText, ink);
+        p.setColor(QPalette::Text, ink);
+        p.setColor(QPalette::Highlight, primary);
+        QApplication::setPalette(p);
+        settle();
+        const auto &colors = PanelPalette::current();
+        for (auto *list : {chat, entries, history, rank}) {
+            const auto image = list->viewport()->grab().toImage();
+            check(!image.isNull() && image.pixelColor(2, image.height() - 2) == window,
+                  "open interaction, rank and history viewports adopt the new host surface");
+        }
+        check(colors.surface == window && colors.giftAction != colors.giftName &&
+              colors.contrast(colors.giftAction, colors.card) >= 4.5 &&
+              colors.contrast(colors.giftName, colors.card) >= 4.5 &&
+              colors.contrast(colors.entryStart, colors.card) >= 4.5 &&
+              colors.contrast(colors.badgeText(colors.badge(primary)), colors.badge(primary)) >= 4.5,
+              "gift, entry and badge lettering stays readable with the new host palette");
+        check(gift.isValid() && chat->model()->rowCount() == 1,
+              "theme changes preserve existing messages and model indices");
+        return colors.accent;
     };
-    auto rows = [&] {
-        QStringList result;
-        if (model)
-            for (int row = 0; row < model->rowCount(); ++row)
-                result.append(model->index(row, 0).data().toString());
-        return result;
+    const auto dark = apply("#1d1f26", "#272a33", "#ffffff", "#284cb8");
+    const auto custom = apply("#1d1f26", "#272a33", "#ffffff", "#46976b");
+    const auto light = apply("#d3d3d3", "#e5e5e5", "#0a0a0a", "#8cb5ff");
+    check(dark != custom && custom != light, "changing only the host accent updates the accent of an open panel");
+    QApplication::setPalette(original);
+    settle();
+}
+
+static void checkInlineGift(LiveController &controller) {
+    QTemporaryDir dir;
+    QSettings settings(QDir(dir.path()).filePath("floating-windows.ini"), QSettings::IniFormat);
+    settings.setValue("avatars", false);
+    settings.setValue("font", 11);
+    settings.sync();
+    RoomRealtime service(&controller);
+    DisplayAssetCache cache;
+    FloatingWindows windows(&service, dir.path());
+    windows.showWindow(0);
+    auto *dock = windows.dockWidget(0);
+    dock->resize(326, 640);
+    auto *view = dock->findChild<QListView *>("messageHistory");
+    auto *model = static_cast<DisplayListModel *>(view->model());
+    model->setAssets(&cache, true);
+    const QString url = QStringLiteral("https://s1.hdslb.com/bfs/live/test-ticket.png");
+    const QString name = QStringLiteral("白忆寒_DreamWalker");
+    QJsonObject gift{{"uname", name}, {"giftId", 34102}, {"giftName", QStringLiteral("人气票")},
+                     {"num", 1}, {"tid", "gift-once"}, {"wealth_info", QJsonObject{{"level", 42}}},
+                     {"medal_info", QJsonObject{{"medal_name", "Healli"}, {"medal_level", 16}, {"medal_color_start", 0x8b516f}}},
+                     {"gift_info", QJsonObject{{"img_basic", "invalid"}, {"webp", url}}}};
+    auto sendGift = [](const QJsonObject &data) { return QJsonObject{{"cmd", "SEND_GIFT"}, {"data", data}}; };
+    auto chat = [](const QString &name, const QString &body, int glory, int level) {
+        QJsonArray info{QJsonArray{}, body, QJsonArray{12, name}, QJsonArray{level, "Healli"}};
+        while (info.size() < 16) info.append(QJsonValue::Null);
+        info.append(QJsonArray{glory});
+        return QJsonObject{{"cmd", "DANMU_MSG"}, {"info", info}};
     };
-    windows.showWindow(0);
-    windows.dockWindow(0);
-    host.addDockWidget(Qt::RightDockWidgetArea, interaction);
-    addGift(QStringLiteral("拆分前的礼物"));
-    const auto before = rows();
-    check(before.size() == 1 && before.first().contains(QStringLiteral("拆分前的礼物")), "merged gift list shows the initial gift");
-
-    split->click();
+    service.events({chat(QStringLiteral("阻星_SunAster"), QStringLiteral("王离哥哥今天又在夺舍谁🐱"), 29, 3),
+                    chat(QStringLiteral("空明AvA"), QStringLiteral("可惜"), 24, 9), sendGift(gift), sendGift(gift),
+                    chat(QStringLiteral("小海"), QStringLiteral("收到了"), 12, 7)});
     settle();
-    check(giftDock->isVisible() && history && giftDock->isAncestorOf(history) && history->model() == model && rows() == before,
-          "splitting moves the existing history into the registered gift dock");
-    windows.dockWindow(FloatingWindows::GiftDock);
-    host.addDockWidget(Qt::LeftDockWidgetArea, giftDock);
-    check(!giftDock->isFloating() && host.dockWidgetArea(giftDock) == Qt::LeftDockWidgetArea &&
-          !interaction->isFloating() && host.dockWidgetArea(interaction) == Qt::RightDockWidgetArea,
-          "gift and interaction independently dock on opposite sides of the host");
-    auto *guard = windows.dockWidget(2);
-    windows.showWindow(2);
-    windows.dockWindow(2);
-    host.tabifyDockWidget(giftDock, guard);
-    guard->raise();
+    const auto index = model->index(2);
+    const auto expected = QStringLiteral("[荣耀 42] [Healli 16] ") + name + QStringLiteral(" 投喂 人气票 🎁");
+    const auto spans = index.data(DisplayListModel::ChatSpansRole).value<QList<ChatSpan>>();
+    const auto images = index.data(DisplayListModel::EmotesRole).value<QList<DanmakuEmote>>();
+    check(model->rowCount() == 4 && index.data().toString() == expected && spans.size() == 5 &&
+          spans[3].kind == ChatSpan::GiftAction && spans[4].kind == ChatSpan::GiftName &&
+          images.size() == 1 && images[0].url == url && images[0].start == expected.indexOf(QStringLiteral("🎁")),
+          "one gift is interleaved between chats with badges, distinct action/name spans and an inline CDN image");
+    QPixmap marker(20, 20);
+    marker.fill(QColor("#32ef91"));
+    cache.storePreview(url, DisplayAssetCache::Usage::Emote, marker);
     settle();
-    check(host.tabifiedDockWidgets(guard).contains(giftDock) && history && giftDock->isAncestorOf(history) && !giftDock->isHidden(),
-          "covering the gift dock with another tab keeps its history detached");
-    giftDock->raise();
+    const auto rect = view->visualRect(index);
+    const auto pixels = view->viewport()->grab(rect).toImage();
+    bool found = false;
+    for (int y = 0; y < pixels.height() && !found; ++y)
+        for (int x = 0; x < pixels.width() && !found; ++x)
+            found = pixels.pixelColor(x, y) == QColor("#32ef91");
+    check(found, "gift art actually paints inside the mixed row when avatars are disabled");
+    const auto previewDir = qEnvironmentVariable("LIVEHIME_UI_SCREENSHOTS");
+    const QJsonObject entry{{"msg_type", 1}, {"uid", 42}, {"uname", name}, {"fans_medal", gift.value("medal_info")},
+                            {"tail_text", QStringLiteral("粉丝团")}};
+    service.events({QJsonObject{{"cmd", "INTERACT_WORD"}, {"data", entry}}});
     settle();
-    check(history && history->isVisibleTo(giftDock) && rows() == before,
-          "returning to the gifts tab reveals the existing list without opening it again");
-    windows.floatWindow(FloatingWindows::GiftDock);
-    check(giftDock->isFloating() && !interaction->isFloating() && history && giftDock->isAncestorOf(history),
-          "floating the gifts leaves interaction docked");
-    interaction->hide();
-    addGift(QStringLiteral("拆分后的礼物"));
-    const auto after = rows();
-    check(giftDock->isVisible() && !interaction->isVisible() && after.size() == 2 && after.first() == before.value(0) &&
-          after.last().contains(QStringLiteral("拆分后的礼物")), "visible gift dock receives new gifts with interaction hidden");
-
-    windows.showWindow(0);
-    merge->click();
-    settle();
-    check(!giftDock->isVisible() && history && interaction->isAncestorOf(history) && history->model() == model && rows() == after,
-          "merge returns the same list and all rows to interaction");
-    {
-        // OBS changes dock visibility from its menu while blocking the dock's signals.
-        const QSignalBlocker block(giftDock);
-        giftDock->setVisible(true);
-        check(giftDock->isVisible() && history && history->isVisible() && giftDock->isAncestorOf(history) && rows() == after,
-              "opening gifts from the signal-blocked OBS menu immediately shows the existing list");
+    auto *entries = dock->findChild<QListView *>("antiHistory");
+    const auto arrival = entries->model()->index(0, 0);
+    const auto entryText = arrival.data().toString();
+    check(entryText.contains("Healli") && entryText.indexOf(name) > entryText.indexOf("Healli") &&
+          entryText.contains(QStringLiteral("进入直播间")) && entryText.endsWith(QStringLiteral("粉丝团")) &&
+          !arrival.data(DisplayListModel::ChatSpansRole).value<QList<ChatSpan>>().isEmpty(),
+          "entry card shows the supplied fan badge, nickname, entry action and trailing room label");
+    if (!previewDir.isEmpty()) {
+        const QPixmap sample(qEnvironmentVariable("LIVEHIME_UI_GIFT_IMAGE"));
+        if (!sample.isNull()) cache.storePreview(url, DisplayAssetCache::Usage::Emote, sample);
+        settle(1900);
+        QDir().mkpath(previewDir);
+        const auto last = view->visualRect(model->index(3));
+        view->viewport()->grab(QRect(0, 0, view->viewport()->width(), last.bottom() + 6)).save(previewDir + "/inline-gift.png");
+        dock->grab().save(previewDir + "/interaction-and-entries.png");
     }
-    {
-        const QSignalBlocker block(giftDock);
-        giftDock->setVisible(false);
-    }
+    gift.insert("is_mystery", true);
+    gift.insert("tid", "anonymous");
+    gift.insert("num", 3);
+    service.events({sendGift(gift)});
     settle();
-    interaction->hide();
-    check(!interaction->isVisible() && !giftDock->isVisible() && !showGifts->isChecked() && history && giftDock->isAncestorOf(history),
-          "closing gifts from the signal-blocked OBS menu keeps the hidden list detached");
-    addGift(QStringLiteral("两个面板隐藏时收到的礼物"));
-    {
-        const QSignalBlocker block(giftDock);
-        giftDock->setVisible(true);
-    }
-    settle();
-    const auto reopened = rows();
-    check(!interaction->isVisible() && showGifts->isChecked() && history && history->isVisible() && giftDock->isAncestorOf(history) &&
-          history->model() == model && reopened.size() == 3 && reopened.mid(0, 2) == after &&
-          reopened.last().contains(QStringLiteral("两个面板隐藏时收到的礼物")),
-          "reopening gifts alone displays gifts received while both docks were hidden");
-
-    giftDock->close();
-    settle();
-    windows.showWindow(0);
-    check(giftDock->isHidden() && !showGifts->isChecked() && split->text() == QStringLiteral("合回礼物"),
-          "interaction offers to merge the closed gift dock");
-    split->click();
-    settle();
-    check(!giftDock->isVisible() && interaction->isVisible() && showGifts->isChecked() && history && history->isVisible() &&
-          interaction->isAncestorOf(history) && history->model() == model && rows() == reopened,
-          "explicitly merging a closed gift dock makes its entire history visible in interaction");
+    const auto anonymous = model->index(4);
+    check(anonymous.data().toString() == QStringLiteral("神秘用户 投喂 人气票 🎁 ×3") &&
+          !anonymous.data(DisplayListModel::SenderRole).isValid(), "multi-gift count remains visible without exposing anonymous badges");
 }
 static QImage paintHighlight(QListView *view, qint64 remainingMs) {
     QStandardItemModel model(1, 1);
@@ -885,7 +1023,7 @@ static void checkNarrowChatPreview(LiveController &controller) {
     QNetworkProxy::setApplicationProxy(QNetworkProxy(QNetworkProxy::HttpProxy, "127.0.0.1", offline.serverPort()));
     QTemporaryDir dir;
     QSettings settings(QDir(dir.path()).filePath("floating-windows.ini"), QSettings::IniFormat);
-    settings.setValue("gifts", false);
+    settings.setValue("showInlineGifts", false);
     settings.setValue("anti", false);
     settings.sync();
     RoomRealtime service(&controller);
@@ -994,7 +1132,7 @@ static void checkNarrowChatPreview(LiveController &controller) {
     const auto alarm = indicator->grab().toImage();
     const auto red = alarm.pixelColor(5, 5);
     check(indicator->isVisible() && indicator->property("connectionState") == "reconnecting" &&
-          indicator->text().contains(QStringLiteral("2 秒")) && red.red() > red.green() * 2,
+          indicator->text().contains(QStringLiteral("2 秒")) && red == PanelPalette::current().retrying,
           "a disconnected chat visibly displays a red warning, retry delay and attempt");
     captureFeature(dock, "03-connection-retry.png");
     settle(1000);
@@ -1005,7 +1143,7 @@ static void checkNarrowChatPreview(LiveController &controller) {
     report(Phase::Connected, 0, QDeadlineTimer::Forever, QStringLiteral("弹幕已连接"));
     settle();
     const auto green = indicator->grab().toImage().pixelColor(5, 5);
-    check(indicator->text() == QStringLiteral("弹幕已连接") && green.green() > green.red(),
+    check(indicator->text() == QStringLiteral("弹幕已连接") && green == PanelPalette::current().connected && green != red,
           "successful recovery replaces the warning with a green connected status");
     captureFeature(dock, "03-connection-restored.png");
     if (qEnvironmentVariableIsEmpty("LIVEHIME_UI_SCREENSHOTS")) return;
@@ -1091,11 +1229,15 @@ static void checkChatIdentityAndActions(LiveController &controller) {
     const auto rect = view->visualRect(index);
     check(!menuAt(rect.topRight() + QPoint(-2, 8)), "blank row area does not open the sender menu");
     check(!menuAt(view->visualRect(model->index(2)).topLeft() + QPoint(8, 12)), "mystery sender has no menu");
-    const auto namePoint = rect.topLeft() + QPoint(6 + 38 + view->fontMetrics().horizontalAdvance("Alice") - 3,
+    auto badgeFont = view->font();
+    badgeFont.setPixelSize(qMax(9, qRound(view->fontMetrics().height() * .62)));
+    badgeFont.setWeight(QFont::DemiBold);
+    const int badgeWidth = QFontMetrics(badgeFont).horizontalAdvance(QStringLiteral("◆ 23")) + 10;
+    const auto namePoint = rect.topLeft() + QPoint(6 + 38 + badgeWidth + view->fontMetrics().horizontalAdvance(" Ali"),
                                                    6 + view->fontMetrics().height() / 2);
     const auto avatarPoint = rect.topLeft() + QPoint(20, 20);
-    check(!menuAt(namePoint + QPoint(view->fontMetrics().horizontalAdvance(" ["), 0)),
-          "the badge immediately after the large-font name is outside the sender menu");
+    check(!menuAt(rect.topLeft() + QPoint(6 + 38 + badgeWidth / 2, 6 + view->fontMetrics().height() / 2)),
+          "the leading glory badge is outside the sender menu");
     auto *menu = menuAt(namePoint);
     check(menu && menu->isVisible(), "right clicking the actual sender name opens the menu");
     if (!menu) return;
@@ -1181,10 +1323,9 @@ static void checkLiveHighlights(LiveController &controller) {
     auto *panel = windows.panelWidget(0);
     auto *messages = panel->findChild<QListView *>("messageHistory");
     auto *activity = panel->findChild<QListView *>("antiHistory");
-    auto *gifts = panel->findChild<QListView *>("giftHistory");
     auto *openEntries = panel->findChild<QPushButton *>("show-entry-history");
-    check(messages && activity && gifts && openEntries, "interaction exposes the views used for live highlights");
-    if (!messages || !activity || !gifts || !openEntries) return;
+    check(messages && activity && openEntries, "interaction exposes the views used for live highlights");
+    if (!messages || !activity || !openEntries) return;
 
     const auto idle = paintHighlight(messages, 0);
     const auto early = paintHighlight(messages, 1100);
@@ -1217,10 +1358,10 @@ static void checkLiveHighlights(LiveController &controller) {
                     QJsonObject{{"cmd", "SEND_GIFT"}, {"data", QJsonObject{{"giftName", "gift"}, {"num", 1}}}}});
     settle();
     const auto firstChat = deadline(messages, 0), firstEntry = deadline(activity, 0);
-    check(messages->model()->rowCount() == 1 && activity->model()->rowCount() == 4 &&
+    check(messages->model()->rowCount() == 2 && activity->model()->rowCount() == 4 &&
           firstChat > arrival && firstEntry > arrival, "live danmaku and room entry get highlight deadlines");
     check(!deadline(activity, 1) && !deadline(activity, 2) && !deadline(activity, 3) &&
-          gifts->model()->rowCount() == 1 && !deadline(gifts, 0), "follows, shares, likes and gifts stay unhighlighted");
+          !deadline(messages, 1), "follows, shares, likes and gifts stay unhighlighted");
 
     class PaintCounter final : public QObject {
       public:
@@ -1238,8 +1379,8 @@ static void checkLiveHighlights(LiveController &controller) {
     service.events({entry, chat}); // Redelivered entry ID, plus another identical-looking, ID-less chat.
     settle();
     windows.showWindow(0);
-    check(messages->model()->rowCount() == 2 && deadline(messages, 0) == firstChat &&
-          deadline(messages, 1) > firstChat, "identical new chat gets its own deadline without restarting older chat");
+    check(messages->model()->rowCount() == 3 && deadline(messages, 0) == firstChat && !deadline(messages, 1) &&
+          deadline(messages, 2) > firstChat, "a gift stays between the two independently highlighted chats");
     check(activity->model()->rowCount() == 4 && deadline(activity, 0) == firstEntry,
           "a replayed entry ID and a presentation rebuild keep the original entry deadline");
 
@@ -1268,18 +1409,18 @@ static void checkLiveHighlights(LiveController &controller) {
           "reopening entry history treats the recently appended entry as existing history");
     fixtureEntries = previousEntries;
 
-    const auto newest = deadline(messages, 1);
+    const auto newest = deadline(messages, 2);
     windows.dockWidget(0)->hide();
     service.events({chat, interaction(1, "while-hidden")});
     windows.showWindow(0);
-    check(messages->model()->rowCount() == 3 && activity->model()->rowCount() == 5 &&
-          !deadline(messages, 2) && !deadline(activity, 4),
+    check(messages->model()->rowCount() == 4 && activity->model()->rowCount() == 5 &&
+          !deadline(messages, 3) && !deadline(activity, 4),
           "chat and entry received while interaction is closed appear as history without a flash");
     windows.dockWidget(0)->hide();
     settle(qMax(0, static_cast<int>(newest - QDeadlineTimer::current(Qt::PreciseTimer).deadline())) + 100);
     windows.showWindow(0);
     const auto now = QDeadlineTimer::current(Qt::PreciseTimer).deadline();
-    check(messages->model()->rowCount() == 3 && deadline(messages, 0) <= now && deadline(messages, 1) <= now &&
+    check(messages->model()->rowCount() == 4 && deadline(messages, 0) <= now && deadline(messages, 2) <= now &&
           deadline(activity, 0) <= now, "reopening interaction cannot restart expired rows");
     service.contextChanged();
     check(!messages->model()->rowCount() && !activity->model()->rowCount(), "changing rooms clears highlighted interaction rows");
@@ -1323,6 +1464,10 @@ int main(int argc, char **argv) {
     RoomRealtime service(&controller);
     checkDockFocus(service);
     checkLiveHighlights(controller);
+    checkInteractionSplitter(controller);
+    checkOnlineRanking(controller);
+    checkThemeChanges(controller);
+    checkInlineGift(controller);
     checkChatIdentityAndActions(controller);
     checkNarrowChatPreview(controller);
     checkDanmakuEmotes(controller);
@@ -1446,7 +1591,7 @@ int main(int argc, char **argv) {
         const auto hostFlags=host.windowFlags();
         auto registered=registerShells(host);
         FloatingWindows windows(&service,dir.path(),&host,registered);
-        const char *expectedIds[]={"livehime-obs-interaction","livehime-obs-audience","livehime-obs-guard","livehime-obs-gifts"};
+        const char *expectedIds[]={"livehime-obs-interaction","livehime-obs-audience","livehime-obs-guard"};
         for(int k=0;k<FloatingWindows::DockCount;++k){
             check(QString::fromLatin1(FloatingWindows::dockId(k))==QString::fromLatin1(expectedIds[k]),"dock restore ID remains stable");
             check(windows.dockWidget(k)==registered[k],"reuses pre-registered OBS dock shell");
@@ -1551,9 +1696,11 @@ int main(int argc, char **argv) {
         windows.dockWindow(0);host.addDockWidget(Qt::RightDockWidgetArea,registered[0]);
         windows.floatWindow(1);registered[1]->setGeometry(40,50,370,540);
         windows.dockWindow(2);host.addDockWidget(Qt::BottomDockWidgetArea,registered[2]);registered[2]->hide();
-        windows.showWindow(FloatingWindows::GiftDock);
-        windows.dockWindow(FloatingWindows::GiftDock);
-        host.addDockWidget(Qt::LeftDockWidgetArea, registered[FloatingWindows::GiftDock]);
+        // Previous releases stored an independent gift dock in OBS's native layout.
+        QDockWidget retiredGift(QStringLiteral("礼物流水"), &host);
+        retiredGift.setObjectName("livehime-obs-gifts");
+        host.addDockWidget(Qt::LeftDockWidgetArea, &retiredGift);
+        retiredGift.show();
         settle();savedDockState=host.saveState(23);savedHostGeometry=host.saveGeometry();
         check(!savedDockState.isEmpty(),"host saved its native dock layout before content shutdown");
         windows.shutdown();
@@ -1571,8 +1718,8 @@ int main(int argc, char **argv) {
         std::array<QRect,FloatingWindows::DockCount> geometries{};
         for(int k=0;k<FloatingWindows::DockCount;++k){floating[k]=registered[k]->isFloating();visible[k]=registered[k]->isVisible();areas[k]=host.dockWidgetArea(registered[k]);geometries[k]=registered[k]->geometry();}
         check(!floating[0]&&floating[1]&&!floating[2]&&!visible[2],"saved layout includes docked floating and hidden states");
-        check(areas[0] == Qt::RightDockWidgetArea && visible[FloatingWindows::GiftDock] && !floating[FloatingWindows::GiftDock] &&
-              areas[FloatingWindows::GiftDock] == Qt::LeftDockWidgetArea, "host restores the independent gift dock opposite interaction");
+        check(areas[0] == Qt::RightDockWidgetArea && !host.findChild<QDockWidget *>("livehime-obs-gifts"),
+              "restoring an older OBS layout keeps interaction docked without recreating a gift dock");
         FloatingWindows windows(&service,freshPresentationSettings.path(),&host,registered);
         settle();
         for(int k=0;k<FloatingWindows::DockCount;++k){
@@ -1591,25 +1738,20 @@ int main(int argc, char **argv) {
                           "restored tiny virtual-screen shell expands only to usable panel constraints");
             }
         }
-        auto *restoredGift = registered[FloatingWindows::GiftDock]->findChild<QListView *>("giftHistory");
-        check(restoredGift && restoredGift->isVisible() && !registered[0]->findChild<QListView *>("giftHistory"),
-              "the restored gift dock contains the single visible history after content injection");
         windows.shutdown();
     }
     {
         QMainWindow host;
-        QTemporaryDir giftSettings;
+        QTemporaryDir panelSettings;
         host.resize(1100,720);
         host.show();
         auto shells=registerShells(host);
-        auto windows=new FloatingWindows(&service,giftSettings.path(),&host,shells);
-        checkGiftDock(host, *windows, service);
-        windows->showWindow(FloatingWindows::GiftDock);
-        QPointer<QListView> splitHistory = shells[FloatingWindows::GiftDock]->findChild<QListView *>("giftHistory");
-        check(splitHistory, "gift dock owns its detached history before teardown");
+        auto windows=new FloatingWindows(&service,panelSettings.path(),&host,shells);
+        windows->showWindow(0);
+        QPointer<QSplitter> splitter = shells[0]->findChild<QSplitter *>("interactionSplitter");
         windows->shutdown();
         for(auto shell:shells)delete shell;
-        check(splitHistory.isNull(),"OBS dock removal releases the detached gift list");
+        check(splitter.isNull(), "removing OBS dock shells releases the interaction splitter");
         delete windows;
         service.events(QJsonArray{QJsonObject{{"cmd","WATCHED_CHANGE"},{"data",QJsonObject{{"num",3}}}}});
         settle();
@@ -1643,8 +1785,8 @@ int main(int argc, char **argv) {
                 auto *model = list->model();
                 const auto firstTime = QDateTime::fromSecsSinceEpoch(1700000000).toString("MM-dd HH:mm:ss");
                 check(model->index(0, 0).data().toString().startsWith(firstTime) &&
-                      model->index(0, 0).data().toString().endsWith(QStringLiteral("早到的观众")) &&
-                      model->index(1, 0).data().toString().endsWith(QStringLiteral("新到的观众")),
+                      model->index(0, 0).data().toString().contains(QStringLiteral("早到的观众")) &&
+                      model->index(1, 0).data().toString().contains(QStringLiteral("新到的观众")),
                       "entry history displays times and names in arrival order");
                 if (screenshots)
                     dialog->grab().save(qEnvironmentVariable("LIVEHIME_UI_SCREENSHOTS") + "/entry-history.png");
@@ -1689,7 +1831,7 @@ int main(int argc, char **argv) {
         windows.showWindow(0);
         check(QGuiApplication::primaryScreen()->availableGeometry().intersects(windows.dockWidget(0)->frameGeometry()),
               "offscreen correction");
-        auto master = window(1)->findChild<QComboBox *>("audienceMaster");
+        auto master = window(1)->findChild<QTabBar *>("audienceMaster");
         auto secondary = window(1)->findChild<QPushButton *>("audienceSecondary");
         for (int i = 0; i < 5; ++i) {
             master->setCurrentIndex(i);
@@ -1719,13 +1861,12 @@ int main(int argc, char **argv) {
                                                                    {"coin_type", "silver"}}}}});
         settle();
         auto msg = a->findChild<QListView *>("messageHistory");
-        auto gift = a->findChild<QListView *>("giftHistory");
-        check(msg->model()->rowCount() == 1 && gift->model()->rowCount() == 1,
-              "events route to separate models");
+        check(msg->model()->rowCount() == 2 && msg->model()->index(1, 0).data().toString().contains(QStringLiteral("投喂 gift")),
+              "the gift follows the chat in the same list");
         for (auto c : a->findChildren<QCheckBox *>())
             if (c->objectName() == "paidOnly")
                 c->setChecked(true);
-        check(gift->model()->rowCount() == 0 && msg->model()->rowCount() == 1,
+        check(msg->model()->rowCount() == 1,
               "gift filter preserves chat history");
         service.contextChanged();
         check(msg->model()->rowCount() == 0, "context clears history");

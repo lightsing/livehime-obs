@@ -24,6 +24,9 @@ struct RoomEntry {
     qint64 sequence = 0;
     qint64 receivedAtMs = QDeadlineTimer::current(Qt::PreciseTimer).deadline();
     qint64 uid = 0, glory = 0;
+    QJsonObject medal;
+    QString nameColor, tailText;
+    bool anonymous = false;
 };
 // One account/room context shared by all windows. Never controls OBS output.
 class RoomRealtime final : public QObject {
@@ -52,6 +55,7 @@ class RoomRealtime final : public QObject {
     QJsonObject audienceData() const { return audience_; }
     QJsonObject guardData() const { return guard_; }
     QString audienceStatus() const { return audienceStatus_; }
+    bool audienceLoadFailed() const { return audienceLoadFailed_; }
     QString guardStatus() const { return guardStatus_; }
     bool guardHasMore() const { return guardHasMore_; }
     quint64 contextEpoch() const { return contextEpoch_; }
@@ -104,7 +108,7 @@ class RoomRealtime final : public QObject {
 
     bool guardHasMore_ = true, stopped_ = false;
     bool visible_[3] = {false, false, false};
-    bool audienceDirty_ = false, guardDirty_ = false;
+    bool audienceDirty_ = false, guardDirty_ = false, audienceLoadFailed_ = false;
     qint64 audienceRequestedAt_ = 0, guardRequestedAt_ = 0, audienceNextAt_ = 0, guardNextAt_ = 0;
 };
 } // namespace livehime
