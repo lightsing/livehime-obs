@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(livehime-obs VERSION 0.4.9 LANGUAGES C CXX)
+project(livehime-obs VERSION 0.4.10 LANGUAGES C CXX)
 
 set(LIVEHIME_BETA_NUMBER "" CACHE STRING "Numeric beta identifier (empty for a stable build)")
 set(release_version "${PROJECT_VERSION}")
